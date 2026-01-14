@@ -9,28 +9,19 @@ const uint32_t WIDTH = 1920;
 const uint32_t HEIGHT = 1080;
 
 typedef struct {
-  float x;
-  float y;
+  float x, y;
 } float2;
 
 typedef struct {
-  float x;
-  float y;
-  float z;
+  float x, y, z;
 } float3;
 
 typedef struct {
-  float x;
-  float y;
-  float z;
-  float w;
+  float x, y, z, w;
 } float4;
 
 typedef struct {
-  float4 col0;
-  float4 col1;
-  float4 col2;
-  float4 col3;
+  float4 col0, col1, col2, col3;
 } float4x4;
 
 typedef struct {
@@ -126,20 +117,16 @@ float4x4 float4x4_identity() {
   };
 }
 
-float4x4 float4x4_look_at(float3 pos, float3 target, float3 up) {
-  float3 view_forward = float3_norm(float3_sub(target, pos));
-  float3 view_right = float3_norm(float3_cross(view_forward, up));
-  float3 view_up = float3_cross(view_forward, view_right);
-
-  float d1 = float3_dot(view_right, pos);
-  float d2 = float3_dot(view_up, pos);
-  float d3 = float3_dot(view_forward, pos);
+float4x4 float4x4_look_at(float3 eye, float3 center, float3 up) {
+  float3 f = float3_norm(float3_sub(center, eye));
+  float3 s = float3_norm(float3_cross(f, up));
+  float3 u = float3_cross(s, f);
 
   return (float4x4){
-      {view_right.x, view_right.y, view_right.z, 0},
-      {view_up.x, view_up.y, view_up.z, 0},
-      {view_forward.x, view_forward.y, view_forward.z, 0},
-      {-d1, -d2, -d3, 1},
+      {s.x, u.x, -f.x, 0},
+      {s.y, u.y, -f.y, 0},
+      {s.z, u.z, -f.z, 0},
+      {-float3_dot(s, eye), -float3_dot(u, eye), float3_dot(f, eye), 1},
   };
 }
 
@@ -152,7 +139,7 @@ float4x4 float4x4_perspective(float aspect, float fov, float near, float far) {
   };
 }
 
-float3 barycentric_weights(float2 p, float2 tri[3]) {
+float3 calc_barycentric_weights(float2 p, float2 tri[3]) {
   float2 a = tri[0];
   float2 b = tri[1];
   float2 c = tri[2];
@@ -170,56 +157,60 @@ float3 barycentric_weights(float2 p, float2 tri[3]) {
   return (float3){xa / xd, xb / xd, xc / xd};
 }
 
-int is_inside_triangle(float2 p, float2 tri[3]) {
-  float3 w = barycentric_weights(p, tri);
+int is_inside_triangle(float2 point, float2 triangle[3],
+                       float3 *barycentric_weights) {
+  float3 w = calc_barycentric_weights(point, triangle);
+
   const float eps = 1e-6f;
-  return w.x >= -eps && w.y >= -eps && w.z >= -eps && w.x <= 1 + eps &&
-         w.y <= 1 + eps && w.z <= 1 + eps;
+  if (w.x >= -eps && w.y >= -eps && w.z >= -eps && w.x <= 1 + eps &&
+      w.y <= 1 + eps && w.z <= 1 + eps) {
+    barycentric_weights->x = w.x;
+    barycentric_weights->y = w.y;
+    barycentric_weights->z = w.z;
+    return 1;
+  } else {
+    return 0;
+  }
 }
 
-int write_bmp_image(uint32_t width, uint32_t height, const uint32_t *pixels) {
+void write_uint32_t(uint8_t *buffer, uint32_t data) {
+  buffer[0] = data & 0xff;
+  buffer[1] = (data >> 8) & 0xff;
+  buffer[2] = (data >> 16) & 0xff;
+  buffer[3] = (data >> 24) & 0xff;
+}
+
+int write_bmp_image(const char *file_name, uint32_t width, uint32_t height,
+                    const uint32_t *pixels) {
   static uint32_t header_size = 54;
   uint32_t file_size = header_size + width * height * sizeof(uint32_t);
   uint32_t pixel_data_size = width * height * sizeof(uint32_t);
 
-  char header[header_size];
+  uint8_t header[header_size];
   memset(header, 0, header_size);
 
-  // BMP identifier
+  // BMP file identifier
   header[0] = 0x42;
   header[1] = 0x4d;
 
-  header[2] = file_size & 0x000000ff;
-  header[3] = (file_size & 0x0000ff00) >> 8;
-  header[4] = (file_size & 0x00ff0000) >> 16;
-  header[6] = (file_size & 0xff000000) >> 24;
+  write_uint32_t(&header[2], file_size);
 
   header[10] = 0x36; // offset to start of pixel data
   header[14] = 0x28; // size of DIB header
 
-  header[18] = width & 0x000000ff;
-  header[19] = (width & 0x0000ff00) >> 8;
-  header[20] = (width & 0x00ff0000) >> 16;
-  header[21] = (width & 0xff000000) >> 24;
-
-  header[22] = height & 0x000000ff;
-  header[23] = (height & 0x0000ff00) >> 8;
-  header[24] = (height & 0x00ff0000) >> 16;
-  header[25] = (height & 0xff000000) >> 24;
+  write_uint32_t(&header[18], width);
+  write_uint32_t(&header[22], height);
 
   header[26] = 0x01; // number of color planes (always 1)
   header[28] = 0x20; // bits per pixel
 
-  header[34] = pixel_data_size & 0x000000ff;
-  header[35] = (pixel_data_size & 0x0000ff00) >> 8;
-  header[36] = (pixel_data_size & 0x00ff0000) >> 16;
-  header[37] = (pixel_data_size & 0xff000000) >> 24;
+  write_uint32_t(&header[34], pixel_data_size);
 
-  FILE *f = fopen("out.bmp", "wb");
+  FILE *f = fopen(file_name, "wb");
   if (!f)
     return 1;
 
-  fwrite(header, sizeof(char), header_size, f);
+  fwrite(header, sizeof(uint8_t), header_size, f);
   fwrite(pixels, sizeof(uint32_t), WIDTH * HEIGHT, f);
 
   fclose(f);
@@ -231,8 +222,8 @@ int main() {
   srand(time(NULL));
 
   float4x4 model_mat = float4x4_identity();
-  float4x4 view_mat = float4x4_look_at((float3){5, -5, -5}, (float3){0, 0, 0},
-                                       (float3){0, -1, 0});
+  float4x4 view_mat =
+      float4x4_look_at((float3){4, 4, 4}, (float3){0, 0, 0}, (float3){0, 1, 0});
   float4x4 projection_mat =
       float4x4_perspective((float)WIDTH / HEIGHT, 3.1415 / 4, 0.1f, 100.0f);
 
@@ -240,25 +231,64 @@ int main() {
       float4x4_mat_mult(float4x4_mat_mult(projection_mat, view_mat), model_mat);
 
   uint32_t vertex_count = 36;
-  float3 verts[] = {
-      {-0.5, -0.5, 0.5},  {0.5, -0.5, 0.5},   {0.5, 0.5, 0.5},
-      {-0.5, -0.5, 0.5},  {0.5, 0.5, 0.5},    {-0.5, 0.5, 0.5},
-      {0.5, -0.5, -0.5},  {-0.5, -0.5, -0.5}, {-0.5, 0.5, -0.5},
-      {0.5, -0.5, -0.5},  {-0.5, 0.5, -0.5},  {0.5, 0.5, -0.5},
-      {0.5, -0.5, 0.5},   {0.5, -0.5, -0.5},  {0.5, 0.5, -0.5},
-      {0.5, -0.5, 0.5},   {0.5, 0.5, -0.5},   {0.5, 0.5, 0.5},
-      {-0.5, -0.5, -0.5}, {-0.5, -0.5, 0.5},  {-0.5, 0.5, 0.5},
-      {-0.5, -0.5, -0.5}, {-0.5, 0.5, 0.5},   {-0.5, 0.5, -0.5},
-      {-0.5, 0.5, 0.5},   {0.5, 0.5, 0.5},    {0.5, 0.5, -0.5},
-      {-0.5, 0.5, 0.5},   {0.5, 0.5, -0.5},   {-0.5, 0.5, -0.5},
-      {-0.5, -0.5, -0.5}, {0.5, -0.5, -0.5},  {0.5, -0.5, 0.5},
-      {-0.5, -0.5, -0.5}, {0.5, -0.5, 0.5},   {-0.5, -0.5, 0.5},
+  Vertex verts[36] = {
+      // Front face
+      {.position = {-0.5f, -0.5f, 0.5f}, .color = {1, 0, 0, 1}, .uv = {0, 0}},
+      {.position = {0.5f, -0.5f, 0.5f}, .color = {1, 0, 0, 1}, .uv = {1, 0}},
+      {.position = {0.5f, 0.5f, 0.5f}, .color = {1, 0, 0, 1}, .uv = {1, 1}},
+
+      {.position = {-0.5f, -0.5f, 0.5f}, .color = {1, 0, 0, 1}, .uv = {0, 0}},
+      {.position = {0.5f, 0.5f, 0.5f}, .color = {1, 0, 0, 1}, .uv = {1, 1}},
+      {.position = {-0.5f, 0.5f, 0.5f}, .color = {1, 0, 0, 1}, .uv = {0, 1}},
+
+      // Back face
+      {.position = {0.5f, -0.5f, -0.5f}, .color = {0, 1, 0, 1}, .uv = {0, 0}},
+      {.position = {-0.5f, -0.5f, -0.5f}, .color = {0, 1, 0, 1}, .uv = {1, 0}},
+      {.position = {-0.5f, 0.5f, -0.5f}, .color = {0, 1, 0, 1}, .uv = {1, 1}},
+
+      {.position = {0.5f, -0.5f, -0.5f}, .color = {0, 1, 0, 1}, .uv = {0, 0}},
+      {.position = {-0.5f, 0.5f, -0.5f}, .color = {0, 1, 0, 1}, .uv = {1, 1}},
+      {.position = {0.5f, 0.5f, -0.5f}, .color = {0, 1, 0, 1}, .uv = {0, 1}},
+
+      // Right face
+      {.position = {0.5f, -0.5f, 0.5f}, .color = {0, 0, 1, 1}, .uv = {0, 0}},
+      {.position = {0.5f, -0.5f, -0.5f}, .color = {0, 0, 1, 1}, .uv = {1, 0}},
+      {.position = {0.5f, 0.5f, -0.5f}, .color = {0, 0, 1, 1}, .uv = {1, 1}},
+
+      {.position = {0.5f, -0.5f, 0.5f}, .color = {0, 0, 1, 1}, .uv = {0, 0}},
+      {.position = {0.5f, 0.5f, -0.5f}, .color = {0, 0, 1, 1}, .uv = {1, 1}},
+      {.position = {0.5f, 0.5f, 0.5f}, .color = {0, 0, 1, 1}, .uv = {0, 1}},
+
+      // Left face
+      {.position = {-0.5f, -0.5f, -0.5f}, .color = {1, 1, 0, 1}, .uv = {0, 0}},
+      {.position = {-0.5f, -0.5f, 0.5f}, .color = {1, 1, 0, 1}, .uv = {1, 0}},
+      {.position = {-0.5f, 0.5f, 0.5f}, .color = {1, 1, 0, 1}, .uv = {1, 1}},
+
+      {.position = {-0.5f, -0.5f, -0.5f}, .color = {1, 1, 0, 1}, .uv = {0, 0}},
+      {.position = {-0.5f, 0.5f, 0.5f}, .color = {1, 1, 0, 1}, .uv = {1, 1}},
+      {.position = {-0.5f, 0.5f, -0.5f}, .color = {1, 1, 0, 1}, .uv = {0, 1}},
+
+      // Top face
+      {.position = {-0.5f, 0.5f, 0.5f}, .color = {1, 0, 1, 1}, .uv = {0, 0}},
+      {.position = {0.5f, 0.5f, 0.5f}, .color = {1, 0, 1, 1}, .uv = {1, 0}},
+      {.position = {0.5f, 0.5f, -0.5f}, .color = {1, 0, 1, 1}, .uv = {1, 1}},
+
+      {.position = {-0.5f, 0.5f, 0.5f}, .color = {1, 0, 1, 1}, .uv = {0, 0}},
+      {.position = {0.5f, 0.5f, -0.5f}, .color = {1, 0, 1, 1}, .uv = {1, 1}},
+      {.position = {-0.5f, 0.5f, -0.5f}, .color = {1, 0, 1, 1}, .uv = {0, 1}},
+
+      // Bottom face
+      {.position = {-0.5f, -0.5f, -0.5f}, .color = {1, 1, 1, 1}, .uv = {0, 0}},
+      {.position = {0.5f, -0.5f, -0.5f}, .color = {1, 1, 1, 1}, .uv = {1, 0}},
+      {.position = {0.5f, -0.5f, 0.5f}, .color = {1, 1, 1, 1}, .uv = {1, 1}},
+
+      {.position = {-0.5f, -0.5f, -0.5f}, .color = {1, 1, 1, 1}, .uv = {0, 0}},
+      {.position = {0.5f, -0.5f, 0.5f}, .color = {1, 1, 1, 1}, .uv = {1, 1}},
+      {.position = {-0.5f, -0.5f, 0.5f}, .color = {1, 1, 1, 1}, .uv = {0, 1}},
   };
 
-  // uint32_t vertex_count = 3;
-  // float3 verts[] = {{0.0, -0.5, 0.0}, {0.5, 0.5, 0.0}, {-0.5, 0.5, 0.0}};
-
   uint32_t *pixels = malloc(WIDTH * HEIGHT * sizeof(*pixels));
+  memset(pixels, 0, WIDTH * HEIGHT * sizeof(*pixels));
 
   for (int i = 0; i < WIDTH * HEIGHT; i++) {
     int rowIndex = i / WIDTH;
@@ -274,23 +304,23 @@ int main() {
       float4 clip_positions[] = {
           float4x4_vec_mult(transform,
                             (float4){
-                                verts[j].x,
-                                verts[j].y,
-                                verts[j].z,
+                                verts[j].position.x,
+                                verts[j].position.y,
+                                verts[j].position.z,
                                 1.0f,
                             }),
           float4x4_vec_mult(transform,
                             (float4){
-                                verts[j + 1].x,
-                                verts[j + 1].y,
-                                verts[j + 1].z,
+                                verts[j + 1].position.x,
+                                verts[j + 1].position.y,
+                                verts[j + 1].position.z,
                                 1.0f,
                             }),
           float4x4_vec_mult(transform,
                             (float4){
-                                verts[j + 2].x,
-                                verts[j + 2].y,
-                                verts[j + 2].z,
+                                verts[j + 2].position.x,
+                                verts[j + 2].position.y,
+                                verts[j + 2].position.z,
                                 1.0f,
                             }),
       };
@@ -310,14 +340,32 @@ int main() {
           },
       };
 
-      if (is_inside_triangle(screen_uv, screen_coords)) {
-        pixels[i] = 0x00ffffff;
+      float backface =
+          float2_cross(float2_sub(screen_coords[1], screen_coords[0]),
+                       float2_sub(screen_coords[2], screen_coords[0]));
+
+      if (backface < 0)
+        continue;
+
+      float3 weights;
+      if (is_inside_triangle(screen_uv, screen_coords, &weights)) {
+        // uint8_t r = weights.x * 255;
+        // uint8_t g = weights.y * 255;
+        // uint8_t b = weights.z * 255;
+        // uint8_t a = 255;
+
+        uint8_t r = verts[j].color.x * 255;
+        uint8_t g = verts[j].color.y * 255;
+        uint8_t b = verts[j].color.z * 255;
+        uint8_t a = verts[j].color.w * 255;
+
+        pixels[i] = (a << 24) | (r << 16) | (g << 8) | (b);
         break;
       }
     }
   }
 
-  write_bmp_image(WIDTH, HEIGHT, pixels);
+  write_bmp_image("out.bmp", WIDTH, HEIGHT, pixels);
 
   free(pixels);
 

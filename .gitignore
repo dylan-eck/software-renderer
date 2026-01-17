@@ -1,0 +1,12 @@
+# macos
+.DS_Store
+__MACOSX/
+.AppleDouble
+.LSOverride
+Icon[]
+._*
+
+# output files
+*.out
+*.bmp
+*.obj

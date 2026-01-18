@@ -191,7 +191,7 @@ float3 calc_barycentric_weights(float2 p, float2 tri[3]) {
     float xd = float2_cross(a, b) + float2_cross(b, c) + float2_cross(c, a);
 
     if (fabsf(xd) < 1e-6f) {
-        return (float3){0, 0, 0};
+        return (float3){-1, -1, -1};
     }
 
     float xa = float2_cross(b, c) + float2_cross(p, float2_sub(b, c));
@@ -249,6 +249,7 @@ int load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices) {
             char *ptr = strtok(line + 2, " ");
             int i = 0;
             int vidxs[4] = {INT_MAX, INT_MAX, INT_MAX, INT_MAX};
+
             while (ptr != NULL) {
                 vidxs[i] = atoi(ptr) - 1;
                 i++;
@@ -256,8 +257,7 @@ int load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices) {
             }
 
             for (int i = 2; i < 4; i++) {
-                if (vidxs[i] == INT_MAX)
-                    continue;
+                if (vidxs[i] == INT_MAX) break;
 
                 float4 color = {
                     .x = (float)rand() / RAND_MAX,
@@ -270,12 +270,20 @@ int load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices) {
                 size_t v1idx = vidxs[i - 1];
                 size_t v2idx = vidxs[i];
 
-                Vertex_da_append(&tris, (Vertex){.position = vs.items[v0idx],
-                                                 .color = color});
-                Vertex_da_append(&tris, (Vertex){.position = vs.items[v1idx],
-                                                 .color = color});
-                Vertex_da_append(&tris, (Vertex){.position = vs.items[v2idx],
-                                                 .color = color});
+                Vertex_da_append(&tris, (Vertex){
+                                            .position = vs.items[v0idx],
+                                            .color = color,
+                                        });
+
+                Vertex_da_append(&tris, (Vertex){
+                                            .position = vs.items[v1idx],
+                                            .color = color,
+                                        });
+
+                Vertex_da_append(&tris, (Vertex){
+                                            .position = vs.items[v2idx],
+                                            .color = color,
+                                        });
             }
         } else if (line[0] == 'v') {
             if (line[1] == ' ') {
@@ -320,21 +328,18 @@ int write_bmp_image(const char *file_name, uint32_t width, uint32_t height,
     header[1] = 0x4d;
 
     write_uint32_t(&header[2], file_size);
-
     header[10] = 0x36; // offset to start of pixel data
     header[14] = 0x28; // size of DIB header
 
+    // DIB header
     write_uint32_t(&header[18], width);
     write_uint32_t(&header[22], height);
-
     header[26] = 0x01; // number of color planes (always 1)
     header[28] = 0x20; // bits per pixel
-
     write_uint32_t(&header[34], pixel_data_size);
 
     FILE *f = fopen(file_name, "wb");
-    if (!f)
-        return 1;
+    if (!f) return 1;
 
     fwrite(header, sizeof(uint8_t), header_size, f);
     fwrite(pixels, sizeof(uint32_t), WIDTH * HEIGHT, f);
@@ -350,17 +355,7 @@ int main() {
     size_t vertex_count;
     Vertex *verts;
 
-    load_obj("./suzanne.obj", &vertex_count, &verts);
-
-    // for (size_t i = 0; i < vertex_count; i++) {
-    //   Vertex v = verts[i];
-
-    //   printf("position: (%5.2f, %5.2f, %5.2f) color: %1.2f %1.2f %1.2f uv:
-    //   %1.2f "
-    //          "%1.2f\n",
-    //          v.position.x, v.position.y, v.position.z, v.color.x, v.color.y,
-    //          v.color.z, v.uv.x, v.uv.y);
-    // }
+    load_obj("./suzanne-bkp.obj", &vertex_count, &verts);
 
     float4x4 model_mat = float4x4_identity();
     float4x4 view_mat = float4x4_look_at((float3){4, 4, 4}, (float3){0, 0, 0},
@@ -439,10 +434,10 @@ int main() {
                 float2_cross(float2_sub(screen_coords[1], screen_coords[0]),
                              float2_sub(screen_coords[2], screen_coords[0]));
 
-            if (backface < 0)
-                continue;
+            if (backface < 0) continue;
 
             float3 weights;
+
             if (is_inside_triangle(screen_uv, screen_coords, &weights)) {
                 uint8_t r = verts[j].color.x * 255;
                 uint8_t g = verts[j].color.y * 255;
@@ -455,6 +450,7 @@ int main() {
         }
     }
 
+    printf("writing output image\n");
     write_bmp_image("out.bmp", WIDTH, HEIGHT, pixels);
 
     free(pixels);

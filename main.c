@@ -1,3 +1,4 @@
+#include <float.h>
 #include <limits.h>
 #include <math.h>
 #include <stdio.h>
@@ -148,8 +149,10 @@ float4 float4x4_vec_mult(float4x4 m, float4 v) {
     float4 row2 = {m.col0.z, m.col1.z, m.col2.z, m.col3.z};
     float4 row3 = {m.col0.w, m.col1.w, m.col2.w, m.col3.w};
 
-    return (float4){float4_dot(row0, v), float4_dot(row1, v),
-                    float4_dot(row2, v), float4_dot(row3, v)};
+    return (float4){float4_dot(row0, v),
+                    float4_dot(row1, v),
+                    float4_dot(row2, v),
+                    float4_dot(row3, v)};
 }
 
 float4x4 float4x4_identity() {
@@ -201,8 +204,9 @@ float3 calc_barycentric_weights(float2 p, float2 tri[3]) {
     return (float3){xa / xd, xb / xd, xc / xd};
 }
 
-int is_inside_triangle(float2 point, float2 triangle[3],
-                       float3 *barycentric_weights) {
+int is_inside_triangle(
+    float2 point, float2 triangle[3], float3 *barycentric_weights) {
+
     float3 w = calc_barycentric_weights(point, triangle);
 
     const float eps = 1e-6f;
@@ -228,7 +232,7 @@ int load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices) {
     FILE *f;
     f = fopen(file_path, "r");
     if (f == NULL) {
-        printf("failed to open file\n");
+        printf("failed to open file %s\n", file_path);
         exit(EXIT_FAILURE);
     }
 
@@ -270,20 +274,26 @@ int load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices) {
                 size_t v1idx = vidxs[i - 1];
                 size_t v2idx = vidxs[i];
 
-                Vertex_da_append(&tris, (Vertex){
-                                            .position = vs.items[v0idx],
-                                            .color = color,
-                                        });
+                Vertex_da_append(
+                    &tris,
+                    (Vertex){
+                        .position = vs.items[v0idx],
+                        .color = color,
+                    });
 
-                Vertex_da_append(&tris, (Vertex){
-                                            .position = vs.items[v1idx],
-                                            .color = color,
-                                        });
+                Vertex_da_append(
+                    &tris,
+                    (Vertex){
+                        .position = vs.items[v1idx],
+                        .color = color,
+                    });
 
-                Vertex_da_append(&tris, (Vertex){
-                                            .position = vs.items[v2idx],
-                                            .color = color,
-                                        });
+                Vertex_da_append(
+                    &tris,
+                    (Vertex){
+                        .position = vs.items[v2idx],
+                        .color = color,
+                    });
             }
         } else if (line[0] == 'v') {
             if (line[1] == ' ') {
@@ -296,10 +306,11 @@ int load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices) {
         }
     }
 
-    printf("     v  count: %lu\n", vs.size);
-    printf("     vn count: %lu\n", vns.size);
-    printf("     vt count: %lu\n", vts.size);
-    printf(" vertex count: %lu\n", tris.size);
+    printf("loaded obj file: %s\n", file_path);
+    printf("       v  count: %lu\n", vs.size);
+    printf("       vn count: %lu\n", vns.size);
+    printf("       vt count: %lu\n", vts.size);
+    printf("   vertex count: %lu\n", tris.size);
 
     free(vs.items);
     free(vns.items);
@@ -314,8 +325,12 @@ int load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices) {
     return 1;
 }
 
-int write_bmp_image(const char *file_name, uint32_t width, uint32_t height,
-                    const uint32_t *pixels) {
+int write_bmp_image(
+    const char *file_name,
+    uint32_t width,
+    uint32_t height,
+    const uint32_t *pixels) {
+
     static uint32_t header_size = 54;
     uint32_t file_size = header_size + width * height * sizeof(uint32_t);
     uint32_t pixel_data_size = width * height * sizeof(uint32_t);
@@ -355,11 +370,13 @@ int main() {
     size_t vertex_count;
     Vertex *verts;
 
-    load_obj("./suzanne-bkp.obj", &vertex_count, &verts);
+    load_obj("./suzanne.obj", &vertex_count, &verts);
 
     float4x4 model_mat = float4x4_identity();
-    float4x4 view_mat = float4x4_look_at((float3){4, 4, 4}, (float3){0, 0, 0},
-                                         (float3){0, 1, 0});
+
+    float4x4 view_mat = float4x4_look_at(
+        (float3){4, 4, 4}, (float3){0, 0, 0}, (float3){0, 1, 0});
+
     float4x4 projection_mat =
         float4x4_perspective((float)WIDTH / HEIGHT, 3.1415 / 4, 0.1f, 100.0f);
 
@@ -369,85 +386,93 @@ int main() {
     uint32_t *pixels = malloc(WIDTH * HEIGHT * sizeof(*pixels));
     memset(pixels, 0, WIDTH * HEIGHT * sizeof(*pixels));
 
-    for (int i = 0; i < WIDTH * HEIGHT; i++) {
-        int rowIndex = i / WIDTH;
-        int colIndex = i % WIDTH;
+    float2 pixel_size = {.x = 2.0f / WIDTH, .y = 2.0f / HEIGHT};
 
-        if (colIndex == 0 && rowIndex % 100 == 0) {
-            printf("begining row: %d\n", rowIndex);
+    for (int i = 0; i < vertex_count; i += 3) {
+        printf("rendering triangle %d\n", i / 3);
+
+        float4 clip_pos[3];
+        float3 ndc_pos[3];
+        float2 scr_pos[3];
+        for (int j = 0; j < 3; j++) {
+            float3 pos = verts[i + j].position;
+
+            // TODO: clip tris outside the viewing volume;
+            clip_pos[j] =
+                float4x4_vec_mult(transform, (float4){pos.x, pos.y, pos.z, 1});
+
+            ndc_pos[j] = (float3){clip_pos[j].x / clip_pos[j].w,
+                                  clip_pos[j].y / clip_pos[j].w,
+                                  clip_pos[j].z / clip_pos[j].w};
+
+            scr_pos[j] = (float2){ndc_pos[j].x, ndc_pos[j].y};
         }
 
-        float2 screen_uv = {
-            (float)colIndex / WIDTH * 2 - 1,
-            (1 - (float)rowIndex / HEIGHT) * 2 - 1,
+        float backface = float2_cross(
+            float2_sub(scr_pos[1], scr_pos[0]),
+            float2_sub(scr_pos[2], scr_pos[0]));
+
+        if (backface < 0) {
+            printf("triangle is a backface, skipping\n\n");
+            continue;
+        }
+
+        float scr_x_min = FLT_MAX;
+        float scr_x_max = FLT_MIN;
+        float scr_y_min = FLT_MAX;
+        float scr_y_max = FLT_MIN;
+
+        for (int j = 0; j < 3; j++) {
+            printf("v%d scr: (%3.5f, %3.5f)\n", j, scr_pos[j].x, scr_pos[j].y);
+
+            if (scr_pos[j].x < scr_x_min) scr_x_min = scr_pos[j].x;
+            if (scr_pos[j].x > scr_x_max) scr_x_max = scr_pos[j].x;
+            if (scr_pos[j].y < scr_y_min) scr_y_min = scr_pos[j].y;
+            if (scr_pos[j].y > scr_y_max) scr_y_max = scr_pos[j].y;
+        }
+
+        int x_start_px = floor(((scr_x_min + 1) / 2) / pixel_size.x);
+        int x_end_px = floor(((scr_x_max + 1) / 2) / pixel_size.x) + 1;
+        int y_start_px = floor(((scr_y_min + 1) / 2) / pixel_size.y);
+        int y_end_px = floor(((scr_y_max + 1) / 2) / pixel_size.y) + 1;
+
+        float3 color = (float3){
+            .x = (float)rand() / RAND_MAX,
+            .y = (float)rand() / RAND_MAX,
+            .z = (float)rand() / RAND_MAX,
         };
 
-        pixels[i] = 0;
-        for (uint32_t j = 0; j < vertex_count; j += 3) {
-            float4 clip_positions[] = {
-                float4x4_vec_mult(transform,
-                                  (float4){
-                                      verts[j].position.x,
-                                      verts[j].position.y,
-                                      verts[j].position.z,
-                                      1.0f,
-                                  }),
-                float4x4_vec_mult(transform,
-                                  (float4){
-                                      verts[j + 1].position.x,
-                                      verts[j + 1].position.y,
-                                      verts[j + 1].position.z,
-                                      1.0f,
-                                  }),
-                float4x4_vec_mult(transform,
-                                  (float4){
-                                      verts[j + 2].position.x,
-                                      verts[j + 2].position.y,
-                                      verts[j + 2].position.z,
-                                      1.0f,
-                                  }),
-            };
+        // TODO: We are checking pixels here that we maybe don't need to check
+        for (int ypx = y_start_px; ypx < y_end_px; ypx++) {
+            for (int xpx = x_start_px; xpx < x_end_px; xpx++) {
+                float2 scr_pt = (float2){
+                    .x = (xpx * pixel_size.x * 2) - 1,
+                    .y = (ypx * pixel_size.y * 2) - 1,
+                };
 
-            float2 screen_coords[] = {
-                {
-                    clip_positions[0].x / clip_positions[0].w,
-                    clip_positions[0].y / clip_positions[0].w,
-                },
-                {
-                    clip_positions[1].x / clip_positions[1].w,
-                    clip_positions[1].y / clip_positions[1].w,
-                },
-                {
-                    clip_positions[2].x / clip_positions[2].w,
-                    clip_positions[2].y / clip_positions[2].w,
-                },
-            };
+                float3 weights;
+                if (is_inside_triangle(scr_pt, scr_pos, &weights)) {
+                    int idx = xpx + ypx * WIDTH;
 
-            for (int i = 0; i < 3; i++) {
-                float2 c = screen_coords[i];
-                if (c.x < -1 || c.x > 1 || c.y < -1 || c.x > 1) {
-                    printf("triangle %u has offscreen verts\n", j / 3);
+                    uint8_t r = color.x * 255;
+                    uint8_t g = color.y * 255;
+                    uint8_t b = color.z * 255;
+                    uint8_t a = 255;
+
+                    pixels[idx] = (a << 24) | (r << 16) | (g << 8) | (b);
                 }
             }
-
-            float backface =
-                float2_cross(float2_sub(screen_coords[1], screen_coords[0]),
-                             float2_sub(screen_coords[2], screen_coords[0]));
-
-            if (backface < 0) continue;
-
-            float3 weights;
-
-            if (is_inside_triangle(screen_uv, screen_coords, &weights)) {
-                uint8_t r = verts[j].color.x * 255;
-                uint8_t g = verts[j].color.y * 255;
-                uint8_t b = verts[j].color.z * 255;
-                uint8_t a = verts[j].color.w * 255;
-
-                pixels[i] = (a << 24) | (r << 16) | (g << 8) | (b);
-                break;
-            }
         }
+
+        printf("tri extent:\n");
+        printf("x: %8.6f %8.6f\n", scr_x_min, scr_x_max);
+        printf("y: %8.6f %8.6f\n", scr_y_min, scr_y_max);
+
+        printf("render extent:\n");
+        printf("x: %d %d\n", x_start_px, x_end_px);
+        printf("y: %d %d\n", y_start_px, y_end_px);
+
+        printf("\n");
     }
 
     printf("writing output image\n");

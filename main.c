@@ -7,9 +7,6 @@
 #include <time.h>
 #include <unistd.h>
 
-const uint32_t WIDTH = 1920;
-const uint32_t HEIGHT = 1080;
-
 typedef struct {
     float x, y;
 } float2;
@@ -29,6 +26,8 @@ typedef struct {
 typedef struct {
     float3 position;
     float p0;
+    float3 normal;
+    float p1;
     float4 color;
     float2 uv;
 } Vertex;
@@ -51,7 +50,78 @@ typedef struct {
     Vertex *items;
 } Vertex_da;
 
-static inline void float2_da_append(float2_da *da, float2 item) {
+extern const Vertex demoModelVerts[3];
+
+static inline void float2_darray_append(float2_da *da, float2 item);
+static inline void float3_darray_append(float3_da *da, float3 item);
+static inline void Vertex_darray_append(Vertex_da *da, Vertex item0);
+
+float2 float2_sub(float2 v1, float2 v2);
+float3 float3_sub(float3 v1, float3 v2);
+
+float float2_cross(float2 v1, float2 v2);
+float3 float3_cross(float3 v1, float3 v2);
+
+float float3_dot(float3 v1, float3 v2);
+float float4_dot(float4 v1, float4 v2);
+
+float float3_mag(float3 v) { return sqrt(float3_dot(v, v)); }
+
+float3 float3_div(float3 v, float s);
+
+float3 float3_norm(float3 v);
+
+float4x4 float4x4_mat_mult(float4x4 m1, float4x4 m2);
+float4 float4x4_vec_mult(float4x4 m, float4 v);
+
+float4x4 float4x4_identity();
+float4x4 float4x4_look_at(float3 eye, float3 center, float3 up);
+float4x4 float4x4_perspective(float aspect, float fov, float near, float far);
+
+float3 calc_barycentric_weights(float2 p, float2 tri[3]);
+int is_inside_triangle(
+    float2 point, float2 triangle[3], float3 *barycentric_weights);
+
+void write_uint32_t(uint8_t *buffer, uint32_t data);
+
+int load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices);
+
+int write_bmp_image(
+    const char *file_name,
+    uint32_t width,
+    uint32_t height,
+    const uint32_t *pixels);
+
+void render(
+    const uint32_t vertex_count,
+    const Vertex *vertices,
+    uint32_t *buffer,
+    const uint32_t width,
+    const uint32_t height);
+
+int main() {
+    srand(time(NULL));
+
+    uint32_t width = 1920;
+    uint32_t height = 1080;
+
+    size_t vertex_count;
+    Vertex *vertices;
+    load_obj("./utah_teapot.obj", &vertex_count, &vertices);
+
+    printf("vertex count: %lu\n", vertex_count);
+
+    uint32_t *pixels = malloc(width * height * sizeof(*pixels));
+    render(vertex_count, vertices, pixels, width, height);
+
+    write_bmp_image("out.bmp", width, height, pixels);
+
+    free(pixels);
+
+    return 0;
+}
+
+static inline void float2_darray_append(float2_da *da, float2 item) {
     if (da->size >= da->capacity) {
         da->capacity = da->capacity ? da->capacity * 2 : 64;
         da->items = realloc(da->items, da->capacity * sizeof *da->items);
@@ -59,7 +129,7 @@ static inline void float2_da_append(float2_da *da, float2 item) {
     da->items[da->size++] = item;
 }
 
-static inline void float3_da_append(float3_da *da, float3 item) {
+static inline void float3_darray_append(float3_da *da, float3 item) {
     if (da->size >= da->capacity) {
         da->capacity = da->capacity ? da->capacity * 2 : 64;
         da->items = realloc(da->items, da->capacity * sizeof *da->items);
@@ -67,7 +137,7 @@ static inline void float3_da_append(float3_da *da, float3 item) {
     da->items[da->size++] = item;
 }
 
-static inline void Vertex_da_append(Vertex_da *da, Vertex item) {
+static inline void Vertex_darray_append(Vertex_da *da, Vertex item) {
     if (da->size >= da->capacity) {
         da->capacity = da->capacity ? da->capacity * 2 : 64;
         da->items = realloc(da->items, da->capacity * sizeof *da->items);
@@ -100,8 +170,6 @@ float float3_dot(float3 v1, float3 v2) {
 float float4_dot(float4 v1, float4 v2) {
     return v1.x * v2.x + v1.y * v2.y + v1.z * v2.z + v1.w * v2.w;
 }
-
-float float3_mag(float3 v) { return sqrt(float3_dot(v, v)); }
 
 float3 float3_div(float3 v, float s) {
     return (float3){v.x / s, v.y / s, v.z / s};
@@ -212,9 +280,12 @@ int is_inside_triangle(
     const float eps = 1e-6f;
     if (w.x >= -eps && w.y >= -eps && w.z >= -eps && w.x <= 1 + eps &&
         w.y <= 1 + eps && w.z <= 1 + eps) {
-        barycentric_weights->x = w.x;
-        barycentric_weights->y = w.y;
-        barycentric_weights->z = w.z;
+
+        if (barycentric_weights != NULL) {
+            barycentric_weights->x = w.x;
+            barycentric_weights->y = w.y;
+            barycentric_weights->z = w.z;
+        }
         return 1;
     } else {
         return 0;
@@ -274,21 +345,21 @@ int load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices) {
                 size_t v1idx = vidxs[i - 1];
                 size_t v2idx = vidxs[i];
 
-                Vertex_da_append(
+                Vertex_darray_append(
                     &tris,
                     (Vertex){
                         .position = vs.items[v0idx],
                         .color = color,
                     });
 
-                Vertex_da_append(
+                Vertex_darray_append(
                     &tris,
                     (Vertex){
                         .position = vs.items[v1idx],
                         .color = color,
                     });
 
-                Vertex_da_append(
+                Vertex_darray_append(
                     &tris,
                     (Vertex){
                         .position = vs.items[v2idx],
@@ -297,20 +368,20 @@ int load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices) {
             }
         } else if (line[0] == 'v') {
             if (line[1] == ' ') {
-                float3_da_append(&vs, (float3){x, y, z});
+                float3_darray_append(&vs, (float3){x, y, z});
             } else if (line[1] == 'n') {
-                float3_da_append(&vns, (float3){x, y, z});
+                float3_darray_append(&vns, (float3){x, y, z});
             } else if (line[1] == 't') {
-                float2_da_append(&vts, (float2){x, y});
+                float2_darray_append(&vts, (float2){x, y});
             }
         }
     }
 
-    printf("loaded obj file: %s\n", file_path);
-    printf("       v  count: %lu\n", vs.size);
-    printf("       vn count: %lu\n", vns.size);
-    printf("       vt count: %lu\n", vts.size);
-    printf("   vertex count: %lu\n", tris.size);
+    // printf("loaded obj file: %s\n", file_path);
+    // printf("       v  count: %lu\n", vs.size);
+    // printf("       vn count: %lu\n", vns.size);
+    // printf("       vt count: %lu\n", vts.size);
+    // printf("   vertex count: %lu\n", tris.size);
 
     free(vs.items);
     free(vns.items);
@@ -357,20 +428,19 @@ int write_bmp_image(
     if (!f) return 1;
 
     fwrite(header, sizeof(uint8_t), header_size, f);
-    fwrite(pixels, sizeof(uint32_t), WIDTH * HEIGHT, f);
+    fwrite(pixels, sizeof(uint32_t), width * height, f);
 
     fclose(f);
 
     return 0;
 }
 
-int main() {
-    srand(time(NULL));
-
-    size_t vertex_count;
-    Vertex *verts;
-
-    load_obj("./suzanne.obj", &vertex_count, &verts);
+void render(
+    const uint32_t vertex_count,
+    const Vertex *vertices,
+    uint32_t *buffer,
+    const uint32_t width,
+    const uint32_t height) {
 
     float4x4 model_mat = float4x4_identity();
 
@@ -378,24 +448,22 @@ int main() {
         (float3){4, 4, 4}, (float3){0, 0, 0}, (float3){0, 1, 0});
 
     float4x4 projection_mat =
-        float4x4_perspective((float)WIDTH / HEIGHT, 3.1415 / 4, 0.1f, 100.0f);
+        float4x4_perspective((float)width / height, 3.1415 / 4, 0.1f, 100.0f);
 
     float4x4 transform = float4x4_mat_mult(
         float4x4_mat_mult(projection_mat, view_mat), model_mat);
 
-    uint32_t *pixels = malloc(WIDTH * HEIGHT * sizeof(*pixels));
-    memset(pixels, 0, WIDTH * HEIGHT * sizeof(*pixels));
+    memset(buffer, 0, width * height * sizeof(*buffer));
 
-    float2 pixel_size = {.x = 2.0f / WIDTH, .y = 2.0f / HEIGHT};
+    float2 pixel_size = {.x = 2.0f / width, .y = 2.0f / height};
 
     for (int i = 0; i < vertex_count; i += 3) {
-        printf("rendering triangle %d\n", i / 3);
 
         float4 clip_pos[3];
         float3 ndc_pos[3];
         float2 scr_pos[3];
         for (int j = 0; j < 3; j++) {
-            float3 pos = verts[i + j].position;
+            float3 pos = vertices[i + j].position;
 
             // TODO: clip tris outside the viewing volume;
             clip_pos[j] =
@@ -405,17 +473,14 @@ int main() {
                                   clip_pos[j].y / clip_pos[j].w,
                                   clip_pos[j].z / clip_pos[j].w};
 
-            scr_pos[j] = (float2){ndc_pos[j].x, ndc_pos[j].y};
+            scr_pos[j] = (float2){ndc_pos[j].x, -ndc_pos[j].y};
         }
 
         float backface = float2_cross(
             float2_sub(scr_pos[1], scr_pos[0]),
             float2_sub(scr_pos[2], scr_pos[0]));
 
-        if (backface < 0) {
-            printf("triangle is a backface, skipping\n\n");
-            continue;
-        }
+        if (backface < 0) continue;
 
         float scr_x_min = FLT_MAX;
         float scr_x_max = FLT_MIN;
@@ -423,18 +488,11 @@ int main() {
         float scr_y_max = FLT_MIN;
 
         for (int j = 0; j < 3; j++) {
-            printf("v%d scr: (%3.5f, %3.5f)\n", j, scr_pos[j].x, scr_pos[j].y);
-
             if (scr_pos[j].x < scr_x_min) scr_x_min = scr_pos[j].x;
             if (scr_pos[j].x > scr_x_max) scr_x_max = scr_pos[j].x;
             if (scr_pos[j].y < scr_y_min) scr_y_min = scr_pos[j].y;
             if (scr_pos[j].y > scr_y_max) scr_y_max = scr_pos[j].y;
         }
-
-        int x_start_px = floor(((scr_x_min + 1) / 2) / pixel_size.x);
-        int x_end_px = floor(((scr_x_max + 1) / 2) / pixel_size.x) + 1;
-        int y_start_px = floor(((scr_y_min + 1) / 2) / pixel_size.y);
-        int y_end_px = floor(((scr_y_max + 1) / 2) / pixel_size.y) + 1;
 
         float3 color = (float3){
             .x = (float)rand() / RAND_MAX,
@@ -442,43 +500,37 @@ int main() {
             .z = (float)rand() / RAND_MAX,
         };
 
+        int x_start_px = floor(((scr_x_min + 1) / 2) * width);
+        int x_end_px = floor(((scr_x_max + 1) / 2) * width);
+        int y_start_px = floor(((scr_y_min + 1) / 2) * height);
+        int y_end_px = floor(((scr_y_max + 1) / 2) * height);
+
         // TODO: We are checking pixels here that we maybe don't need to check
         for (int ypx = y_start_px; ypx < y_end_px; ypx++) {
             for (int xpx = x_start_px; xpx < x_end_px; xpx++) {
-                float2 scr_pt = (float2){
-                    .x = (xpx * pixel_size.x * 2) - 1,
-                    .y = (ypx * pixel_size.y * 2) - 1,
-                };
+                float2 scr_pt;
+
+                scr_pt.x = -1.0f + (xpx + 0.5f) * pixel_size.x;
+                scr_pt.y = -1.0f + (ypx + 0.5f) * pixel_size.y;
+
+                uint32_t idx = xpx + ypx * width;
 
                 float3 weights;
-                if (is_inside_triangle(scr_pt, scr_pos, &weights)) {
-                    int idx = xpx + ypx * WIDTH;
+                if (!is_inside_triangle(scr_pt, scr_pos, &weights)) continue;
 
-                    uint8_t r = color.x * 255;
-                    uint8_t g = color.y * 255;
-                    uint8_t b = color.z * 255;
-                    uint8_t a = 255;
+                uint8_t r = color.x * 255;
+                uint8_t g = color.y * 255;
+                uint8_t b = color.z * 255;
+                uint8_t a = 255;
 
-                    pixels[idx] = (a << 24) | (r << 16) | (g << 8) | (b);
-                }
+                buffer[idx] = (a << 24) | (r << 16) | (g << 8) | (b);
             }
         }
-
-        printf("tri extent:\n");
-        printf("x: %8.6f %8.6f\n", scr_x_min, scr_x_max);
-        printf("y: %8.6f %8.6f\n", scr_y_min, scr_y_max);
-
-        printf("render extent:\n");
-        printf("x: %d %d\n", x_start_px, x_end_px);
-        printf("y: %d %d\n", y_start_px, y_end_px);
-
-        printf("\n");
     }
-
-    printf("writing output image\n");
-    write_bmp_image("out.bmp", WIDTH, HEIGHT, pixels);
-
-    free(pixels);
-
-    return 0;
 }
+
+const Vertex demoModelVerts[3] = {
+    {.position = {0, 0, 0}},
+    {.position = {1, 0, 0}},
+    {.position = {0, 1, 0}},
+};

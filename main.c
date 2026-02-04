@@ -50,8 +50,6 @@ typedef struct {
     Vertex *items;
 } Vertex_da;
 
-extern const Vertex demoModelVerts[3];
-
 static inline void float2_darray_append(float2_da *da, float2 item);
 static inline void float3_darray_append(float3_da *da, float3 item);
 static inline void Vertex_darray_append(Vertex_da *da, Vertex item0);
@@ -87,17 +85,12 @@ void write_uint32_t(uint8_t *buffer, uint32_t data);
 int load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices);
 
 int write_bmp_image(
-    const char *file_name,
-    uint32_t width,
-    uint32_t height,
+    const char *file_name, uint32_t width, uint32_t height,
     const uint32_t *pixels);
 
 void render(
-    const uint32_t vertex_count,
-    const Vertex *vertices,
-    uint32_t *buffer,
-    const uint32_t width,
-    const uint32_t height);
+    const uint32_t vertex_count, const Vertex *vertices, uint32_t *colorBuffer,
+    float *depthBuffer, const uint32_t width, const uint32_t height);
 
 int main() {
     srand(time(NULL));
@@ -105,18 +98,19 @@ int main() {
     uint32_t width = 1920;
     uint32_t height = 1080;
 
+    size_t test_vert_count = 6;
+
     size_t vertex_count;
     Vertex *vertices;
-    load_obj("./utah_teapot.obj", &vertex_count, &vertices);
+    load_obj("./test/suzanne_smooth.obj", &vertex_count, &vertices);
 
-    printf("vertex count: %lu\n", vertex_count);
+    uint32_t *colorBuffer = malloc(width * height * sizeof(*colorBuffer));
+    float *depthBuffer = malloc(width * height * sizeof(*depthBuffer));
+    render(vertex_count, vertices, colorBuffer, depthBuffer, width, height);
 
-    uint32_t *pixels = malloc(width * height * sizeof(*pixels));
-    render(vertex_count, vertices, pixels, width, height);
+    write_bmp_image("out.bmp", width, height, colorBuffer);
 
-    write_bmp_image("out.bmp", width, height, pixels);
-
-    free(pixels);
+    free(colorBuffer);
 
     return 0;
 }
@@ -217,10 +211,8 @@ float4 float4x4_vec_mult(float4x4 m, float4 v) {
     float4 row2 = {m.col0.z, m.col1.z, m.col2.z, m.col3.z};
     float4 row3 = {m.col0.w, m.col1.w, m.col2.w, m.col3.w};
 
-    return (float4){float4_dot(row0, v),
-                    float4_dot(row1, v),
-                    float4_dot(row2, v),
-                    float4_dot(row3, v)};
+    return (float4){float4_dot(row0, v), float4_dot(row1, v),
+                    float4_dot(row2, v), float4_dot(row3, v)};
 }
 
 float4x4 float4x4_identity() {
@@ -247,9 +239,9 @@ float4x4 float4x4_look_at(float3 eye, float3 center, float3 up) {
 
 float4x4 float4x4_perspective(float aspect, float fov, float near, float far) {
     return (float4x4){
-        {1 / (aspect * tan(fov / 2)), 0, 0, 0},
-        {0, 1 / tan(fov / 2), 0, 0},
-        {0, 0, far / (far - near), 1},
+        {1 / (aspect * tanf(fov / 2)), 0, 0, 0},
+        {0, 1 / tanf(fov / 2), 0, 0},
+        {0, 0, far / (near - far), -1},
         {0, 0, -far * near / (far - near), 0},
     };
 }
@@ -308,8 +300,8 @@ int load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices) {
     }
 
     float3_da vs = {0};
-    float3_da vns = {0};
     float2_da vts = {0};
+    float3_da vns = {0};
     Vertex_da tris = {0};
 
     char *line = NULL;
@@ -322,49 +314,52 @@ int load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices) {
 
         if (line[0] == 'f') {
             char *ptr = strtok(line + 2, " ");
-            int i = 0;
-            int vidxs[4] = {INT_MAX, INT_MAX, INT_MAX, INT_MAX};
+
+            int vc = 0;
+            Vertex verts[4];
 
             while (ptr != NULL) {
-                vidxs[i] = atoi(ptr) - 1;
-                i++;
-                ptr = strtok(NULL, " ");
+                int32_t nums[3];
+                int num_count = 0;
+                int slash_count = 0;
+                char *p = ptr;
+
+                while (*p && num_count < 3) {
+                    nums[num_count++] = (int32_t)strtol(p, (char **)&p, 10);
+                    while (*p == '/') {
+                        slash_count++;
+                        p++;
+                    };
+                }
+
+                // TODO: clean this up
+                if (num_count == 1) {
+                    float3 v = vs.items[nums[0] - 1];
+                    verts[vc++] = (Vertex){.position = v};
+                } else if (num_count == 3) { // v, vn, vt
+                    float3 v = vs.items[nums[0] - 1];
+                    float2 vt = vts.items[nums[1] - 1];
+                    float3 vn = vs.items[nums[2] - 1];
+                    verts[vc++] =
+                        (Vertex){.position = v, .normal = vn, .uv = vt};
+
+                } else if (slash_count == 1) {
+                    float3 v = vs.items[nums[0] - 1];
+                    float3 vn = vs.items[nums[2] - 1];
+                    verts[vc++] = (Vertex){.position = v, .normal = vn};
+                } else {
+                    float3 v = vs.items[nums[0] - 1];
+                    float2 vt = vts.items[nums[1] - 1];
+                    verts[vc++] = (Vertex){.position = v, .uv = vt};
+                }
+
+                ptr = strtok(NULL, " \n");
             }
 
-            for (int i = 2; i < 4; i++) {
-                if (vidxs[i] == INT_MAX) break;
-
-                float4 color = {
-                    .x = (float)rand() / RAND_MAX,
-                    .y = (float)rand() / RAND_MAX,
-                    .z = (float)rand() / RAND_MAX,
-                    .w = 1.0f,
-                };
-
-                size_t v0idx = vidxs[0];
-                size_t v1idx = vidxs[i - 1];
-                size_t v2idx = vidxs[i];
-
-                Vertex_darray_append(
-                    &tris,
-                    (Vertex){
-                        .position = vs.items[v0idx],
-                        .color = color,
-                    });
-
-                Vertex_darray_append(
-                    &tris,
-                    (Vertex){
-                        .position = vs.items[v1idx],
-                        .color = color,
-                    });
-
-                Vertex_darray_append(
-                    &tris,
-                    (Vertex){
-                        .position = vs.items[v2idx],
-                        .color = color,
-                    });
+            for (int i = 2; i < vc; i++) {
+                Vertex_darray_append(&tris, verts[0]);
+                Vertex_darray_append(&tris, verts[i - 1]);
+                Vertex_darray_append(&tris, verts[i]);
             }
         } else if (line[0] == 'v') {
             if (line[1] == ' ') {
@@ -377,11 +372,11 @@ int load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices) {
         }
     }
 
-    // printf("loaded obj file: %s\n", file_path);
-    // printf("       v  count: %lu\n", vs.size);
-    // printf("       vn count: %lu\n", vns.size);
-    // printf("       vt count: %lu\n", vts.size);
-    // printf("   vertex count: %lu\n", tris.size);
+    printf("loaded obj file: %s\n", file_path);
+    printf("       v  count: %lu\n", vs.size);
+    printf("       vn count: %lu\n", vns.size);
+    printf("       vt count: %lu\n", vts.size);
+    printf("   vertex count: %lu\n", tris.size);
 
     free(vs.items);
     free(vns.items);
@@ -397,9 +392,7 @@ int load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices) {
 }
 
 int write_bmp_image(
-    const char *file_name,
-    uint32_t width,
-    uint32_t height,
+    const char *file_name, uint32_t width, uint32_t height,
     const uint32_t *pixels) {
 
     static uint32_t header_size = 54;
@@ -419,7 +412,10 @@ int write_bmp_image(
 
     // DIB header
     write_uint32_t(&header[18], width);
-    write_uint32_t(&header[22], height);
+
+    // by default, BMP assumes rows are in bottom to top order
+    uint32_t inverse_height = (uint32_t)(-(int32_t)(height));
+    write_uint32_t(&header[22], inverse_height);
     header[26] = 0x01; // number of color planes (always 1)
     header[28] = 0x20; // bits per pixel
     write_uint32_t(&header[34], pixel_data_size);
@@ -436,32 +432,39 @@ int write_bmp_image(
 }
 
 void render(
-    const uint32_t vertex_count,
-    const Vertex *vertices,
-    uint32_t *buffer,
-    const uint32_t width,
-    const uint32_t height) {
+    const uint32_t vertex_count, const Vertex *vertices, uint32_t *colorBuffer,
+    float *depthBuffer, const uint32_t width, const uint32_t height) {
+
+    memset(colorBuffer, 0, width * height * sizeof(*colorBuffer));
+
+    for (size_t i = 0; i < width * height; i++) {
+        depthBuffer[i] = 1.0f;
+    }
 
     float4x4 model_mat = float4x4_identity();
 
     float4x4 view_mat = float4x4_look_at(
-        (float3){4, 4, 4}, (float3){0, 0, 0}, (float3){0, 1, 0});
+        (float3){0, 0, 4}, (float3){0, 0, 0}, (float3){0, -1, 0});
 
     float4x4 projection_mat =
-        float4x4_perspective((float)width / height, 3.1415 / 4, 0.1f, 100.0f);
+        float4x4_perspective((float)width / height, 3.1415 / 4, 0.1f, 500.0f);
 
     float4x4 transform = float4x4_mat_mult(
         float4x4_mat_mult(projection_mat, view_mat), model_mat);
 
-    memset(buffer, 0, width * height * sizeof(*buffer));
-
     float2 pixel_size = {.x = 2.0f / width, .y = 2.0f / height};
 
+    float3 sun_direction = {.x = 0, .y = 1, .z = 2};
+    sun_direction = float3_norm(sun_direction);
+
     for (int i = 0; i < vertex_count; i += 3) {
+        // printf("\nvertex %d\n", i / 3);
 
         float4 clip_pos[3];
         float3 ndc_pos[3];
         float2 scr_pos[3];
+        int shouldClip = 0;
+
         for (int j = 0; j < 3; j++) {
             float3 pos = vertices[i + j].position;
 
@@ -469,11 +472,27 @@ void render(
             clip_pos[j] =
                 float4x4_vec_mult(transform, (float4){pos.x, pos.y, pos.z, 1});
 
+            // if (clip_pos[j].x < -clip_pos[j].w ||
+            //     clip_pos[j].x > clip_pos[j].w ||
+            //     clip_pos[j].y < -clip_pos[j].w ||
+            //     clip_pos[j].y > clip_pos[j].w ||
+            //     clip_pos[j].z < -clip_pos[j].w ||
+            //     clip_pos[j].x > clip_pos[j].w) {
+
+            //     printf("vertex outside viewing volume\n");
+            //     shouldClip = 1;
+            //     break;
+            // }
+
             ndc_pos[j] = (float3){clip_pos[j].x / clip_pos[j].w,
                                   clip_pos[j].y / clip_pos[j].w,
                                   clip_pos[j].z / clip_pos[j].w};
 
-            scr_pos[j] = (float2){ndc_pos[j].x, -ndc_pos[j].y};
+            scr_pos[j] = (float2){ndc_pos[j].x, ndc_pos[j].y};
+        }
+
+        if (shouldClip == 1) {
+            continue;
         }
 
         float backface = float2_cross(
@@ -481,6 +500,20 @@ void render(
             float2_sub(scr_pos[2], scr_pos[0]));
 
         if (backface < 0) continue;
+
+        // for (int j = 0; j < 3; j++) {
+        //     printf(
+        //         "pos: % 5.3f % 5.3f % 5.3f\n", vertices[i + j].position.x,
+        //         vertices[i + j].position.y, vertices[i + j].position.z);
+        // }
+        // printf("\n");
+
+        // for (int j = 0; j < 3; j++) {
+        //     printf(
+        //         "pos: % 5.3f % 5.3f % 5.3f % 5.3f\n", clip_pos[i].x,
+        //         clip_pos[i].y, clip_pos[i].z, clip_pos[i].w);
+        // }
+        // printf("\n");
 
         float scr_x_min = FLT_MAX;
         float scr_x_max = FLT_MIN;
@@ -505,9 +538,14 @@ void render(
         int y_start_px = floor(((scr_y_min + 1) / 2) * height);
         int y_end_px = floor(((scr_y_max + 1) / 2) * height);
 
-        // TODO: We are checking pixels here that we maybe don't need to check
+        // TODO: We are checking pixels here that we maybe don't need to
+        // check
         for (int ypx = y_start_px; ypx < y_end_px; ypx++) {
             for (int xpx = x_start_px; xpx < x_end_px; xpx++) {
+                if (xpx < 0 || xpx > width || ypx < 0 || ypx > height) {
+                    continue;
+                }
+
                 float2 scr_pt;
 
                 scr_pt.x = -1.0f + (xpx + 0.5f) * pixel_size.x;
@@ -518,12 +556,80 @@ void render(
                 float3 weights;
                 if (!is_inside_triangle(scr_pt, scr_pos, &weights)) continue;
 
-                uint8_t r = color.x * 255;
-                uint8_t g = color.y * 255;
-                uint8_t b = color.z * 255;
+                float depth = weights.x * ndc_pos[0].z +
+                              weights.y * ndc_pos[1].z +
+                              weights.z * ndc_pos[2].z;
+
+                if (depth > depthBuffer[idx]) continue;
+                depthBuffer[idx] = depth;
+
+                // uint8_t r = color.x * 255;
+                // uint8_t g = color.y * 255;
+                // uint8_t b = color.z * 255;
+                // uint8_t a = 255;
+
+                float nx = weights.x * vertices[i + 0].normal.x +
+                           weights.y * vertices[i + 1].normal.x +
+                           weights.z * vertices[i + 2].normal.x;
+
+                float ny = weights.x * vertices[i + 0].normal.y +
+                           weights.y * vertices[i + 1].normal.y +
+                           weights.z * vertices[i + 2].normal.y;
+
+                float nz = weights.x * vertices[i + 0].normal.z +
+                           weights.y * vertices[i + 1].normal.z +
+                           weights.z * vertices[i + 2].normal.z;
+
+                float4 world_normal = float4x4_vec_mult(
+                    model_mat, (float4){.x = nx, .y = ny, .z = nz, .w = 0});
+
+                float light_intensity = float3_dot(
+                    (float3){.x = world_normal.x,
+                             .y = world_normal.y,
+                             .z = world_normal.z},
+                    sun_direction);
+
+                // uint8_t r = world_normal.x * 255;
+                // uint8_t g = world_normal.y * 255;
+                // uint8_t b = world_normal.z * 255;
+                // uint8_t a = 255;
+
+                uint8_t r, g, b;
                 uint8_t a = 255;
 
-                buffer[idx] = (a << 24) | (r << 16) | (g << 8) | (b);
+                if (light_intensity > 0) {
+                    r = light_intensity * 255;
+                } else {
+                    r = 80;
+                }
+
+                g = r;
+                b = r;
+
+                // float uvx = weights.x * vertices[i + 0].uv.x +
+                //             weights.y * vertices[i + 1].uv.x +
+                //             weights.z * vertices[i + 2].uv.x;
+
+                // float uvy = weights.x * vertices[i + 0].uv.y +
+                //             weights.y * vertices[i + 1].uv.y +
+                //             weights.z * vertices[i + 2].uv.y;
+
+                // uint8_t r = uvx * 255;
+                // uint8_t g = uvy * 255;
+                // uint8_t b = 255;
+                // uint8_t a = 255;
+
+                colorBuffer[idx] = (a << 24) | (r << 16) | (g << 8) | (b);
+
+                // float cutoff = 0.05;
+                // if (weights.x < cutoff || weights.y < cutoff
+                // ||
+                //     weights.z < cutoff) {
+
+                //     colorBuffer[idx] =
+                //         (255 << 24) | (255 << 16) | (0 << 8)
+                //         | (0);
+                // }
             }
         }
     }

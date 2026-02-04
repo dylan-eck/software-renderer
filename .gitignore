@@ -10,3 +10,6 @@ Icon[]
 *.out
 *.bmp
 *.obj
+
+# testing
+test

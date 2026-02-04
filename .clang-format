@@ -5,5 +5,5 @@ IndentWidth: 4
 UseTab: Never
 AllowShortIfStatementsOnASingleLine: Always
 AlignAfterOpenBracket: AlwaysBreak
-BinPackArguments: false
-BinPackParameters: false
+# BinPackArguments: false
+# BinPackParameters: false

@@ -106,25 +106,18 @@ int main() {
 
     size_t vertex_count;
     Vertex *vertices;
-    load_obj("./test/armadillo_7kv.obj", &vertex_count, &vertices);
+    load_obj("./test/rose.obj", &vertex_count, &vertices);
     printf("done loading model\n");
 
-    // for (size_t i = 0; i < vertex_count; i++) {
-    //     float3 p = vertices[i].position;
-    //     printf("% 5.3f % 5.3f % 5.3f\n", p.x, p.y, p.z);
-    // }
-    // printf("#### BOOP ####\n");
+    float3 avg_position = {};
+    for (size_t i = 0; i < vertex_count; i++) {
+        avg_position = float3_add(avg_position, vertices[i].position);
+    }
+    avg_position = float3_div(avg_position, vertex_count);
 
-    // float3 avg_position = {};
-    // for (size_t i = 0; i < vertex_count; i++) {
-    //     avg_position = float3_add(avg_position, vertices[i].position);
-    // }
-    // avg_position = float3_div(avg_position, vertex_count);
-
-    // for (size_t i = 0; i < vertex_count; i++) {
-    //     vertices[i].position = float3_sub(vertices[i].position,
-    //     avg_position);
-    // }
+    for (size_t i = 0; i < vertex_count; i++) {
+        vertices[i].position = float3_sub(vertices[i].position, avg_position);
+    }
 
     uint32_t *colorBuffer = calloc(width * height, sizeof(*colorBuffer));
     float *depthBuffer = malloc(width * height * sizeof(*depthBuffer));
@@ -370,6 +363,8 @@ int load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices) {
                 char *p = ptr;
 
                 while (*p && num_count < 3) {
+                    if (*p == '\r' || *p == '\n') break;
+
                     nums[num_count++] = (int32_t)strtol(p, (char **)&p, 10);
                     while (*p == '/') {
                         slash_count++;
@@ -502,10 +497,10 @@ void render(
     }
 
     float4x4 model_mat =
-        float4x4_mat_mult(float4x4_scale(1.0), float4x4_identity());
+        float4x4_mat_mult(float4x4_scale(3.0), float4x4_identity());
 
     float4x4 view_mat = float4x4_look_at(
-        (float3){0, 0, -300}, (float3){0, 0, 0}, (float3){0, -1, 0});
+        (float3){0, 0, 300}, (float3){0, 0, 0}, (float3){0, -1, 0});
 
     float4x4 projection_mat =
         float4x4_perspective((float)width / height, 3.1415 / 4, 0.1f, 500.0f);

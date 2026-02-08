@@ -4,6 +4,6 @@ ColumnLimit: 80
 IndentWidth: 4
 UseTab: Never
 AllowShortIfStatementsOnASingleLine: Always
-AlignAfterOpenBracket: AlwaysBreak
+# AlignAfterOpenBracket: AlwaysBreak
 # BinPackArguments: false
 # BinPackParameters: false

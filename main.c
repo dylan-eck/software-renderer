@@ -1,5 +1,7 @@
 /*
- * Simple Software Renderer
+ * Single File Software Renderer
+ *
+ * This is a very basic software renderer that can load and render obj files.
  */
 
 #include <float.h>
@@ -80,18 +82,16 @@ int is_inside_triangle(vec2 point, vec2 triangle[3], vec3 *bweights);
 
 int load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices);
 
-void write_uint32_t(uint8_t *buffer, uint32_t data);
-int write_bmp_image(const char *file_name, uint32_t width, uint32_t height,
-                    const uint32_t *pixels);
-
 void render(const uint32_t vertex_count, const Vertex *vertices,
             uint32_t *colorBuffer, float *depthBuffer, const uint32_t width,
             const uint32_t height);
 
+void write_uint32_t_le(uint8_t *buffer, uint32_t data);
+int write_bmp_image(const char *file_name, uint32_t width, uint32_t height,
+                    const uint32_t *pixels);
+
 /* MAIN */
 int main() {
-    srand(time(NULL));
-
     uint32_t width = 1920;
     uint32_t height = 1080;
 
@@ -207,21 +207,12 @@ vec4 mat4_vec4_mult(mat4 m, vec4 v) {
 }
 
 mat4 mat4_identity() {
-    return (mat4){
-        {1, 0, 0, 0},
-        {0, 1, 0, 0},
-        {0, 0, 1, 0},
-        {0, 0, 0, 1},
-    };
+    return (mat4){{1, 0, 0, 0}, {0, 1, 0, 0}, {0, 0, 1, 0}, {0, 0, 0, 1}};
 }
 
 mat4 mat4_scale(float factor) {
     return (mat4){
-        {factor, 0, 0, 0},
-        {0, factor, 0, 0},
-        {0, 0, factor, 0},
-        {0, 0, 0, 1},
-    };
+        {factor, 0, 0, 0}, {0, factor, 0, 0}, {0, 0, factor, 0}, {0, 0, 0, 1}};
 }
 
 mat4 mat4_look_at(vec3 eye, vec3 center, vec3 up) {
@@ -279,13 +270,6 @@ int is_inside_triangle(vec2 point, vec2 triangle[3],
     } else {
         return 0;
     }
-}
-
-void write_uint32_t(uint8_t *buffer, uint32_t data) {
-    buffer[0] = data & 0xff;
-    buffer[1] = (data >> 8) & 0xff;
-    buffer[2] = (data >> 16) & 0xff;
-    buffer[3] = (data >> 24) & 0xff;
 }
 
 int load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices) {
@@ -363,14 +347,11 @@ int load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices) {
             }
         } else if (line[0] == 'v') {
             if (line[1] == ' ') {
-                vec3 v = (vec3){x, y, z};
-                DARRAY_APPEND(vs, v);
+                DARRAY_APPEND(vs, ((vec3){x, y, z}));
             } else if (line[1] == 'n') {
-                vec3 v = (vec3){x, y, z};
-                DARRAY_APPEND(vns, v);
+                DARRAY_APPEND(vns, ((vec3){x, y, z}));
             } else if (line[1] == 't') {
-                vec2 v = (vec2){x, y};
-                DARRAY_APPEND(vts, v);
+                DARRAY_APPEND(vts, ((vec2){x, y}));
             }
         }
     }
@@ -403,6 +384,13 @@ int load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices) {
     return 1;
 }
 
+void write_uint32_t_le(uint8_t *buffer, uint32_t data) {
+    buffer[0] = data & 0xff;
+    buffer[1] = (data >> 8) & 0xff;
+    buffer[2] = (data >> 16) & 0xff;
+    buffer[3] = (data >> 24) & 0xff;
+}
+
 int write_bmp_image(const char *file_name, uint32_t width, uint32_t height,
                     const uint32_t *pixels) {
 
@@ -417,19 +405,19 @@ int write_bmp_image(const char *file_name, uint32_t width, uint32_t height,
     header[0] = 0x42;
     header[1] = 0x4d;
 
-    write_uint32_t(&header[2], file_size);
+    write_uint32_t_le(&header[2], file_size);
     header[10] = 0x36; // offset to start of pixel data
     header[14] = 0x28; // size of DIB header
 
     // DIB header
-    write_uint32_t(&header[18], width);
+    write_uint32_t_le(&header[18], width);
 
     // by default, BMP assumes rows are in bottom to top order
     uint32_t inverse_height = (uint32_t)(-(int32_t)(height));
-    write_uint32_t(&header[22], inverse_height);
+    write_uint32_t_le(&header[22], inverse_height);
     header[26] = 0x01; // number of color planes (always 1)
     header[28] = 0x20; // bits per pixel
-    write_uint32_t(&header[34], pixel_data_size);
+    write_uint32_t_le(&header[34], pixel_data_size);
 
     FILE *f = fopen(file_name, "wb");
     if (!f) return 1;
@@ -573,17 +561,15 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
                 vec4 world_normal = vec4_norm(mat4_vec4_mult(
                     model_mat, (vec4){.x = nx, .y = ny, .z = nz, .w = 0}));
 
-                float ambient = 0.1;
-                float light_intensity =
-                    fmax(vec3_dot((vec3){.x = world_normal.x,
-                                         .y = world_normal.y,
-                                         .z = world_normal.z},
-                                  sun_direction),
-                         0) +
-                    ambient;
+                float intensity = vec3_dot((vec3){.x = world_normal.x,
+                                                  .y = world_normal.y,
+                                                  .z = world_normal.z},
+                                           sun_direction);
 
-                set_pixel(colorBuffer, idx, light_intensity, light_intensity,
-                          light_intensity, 1);
+                intensity = fmax(intensity, 0);
+                intensity = fmin(intensity + 0.1, 1);
+
+                set_pixel(colorBuffer, idx, intensity, intensity, intensity, 1);
             }
         }
     }

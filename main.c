@@ -33,6 +33,12 @@
         array.items[array.size++] = item;                                      \
     } while (0)
 
+/* GLOBALS */
+// See the end of this file for teapot model data
+enum { TEAPOT_VERTEX_COUNT = 255, TEAPOT_INDEX_COUNT = 351 };
+static const float TEAPOT_VERTICES[TEAPOT_VERTEX_COUNT];
+static const uint8_t TEAPOT_INDICES[TEAPOT_INDEX_COUNT];
+
 /* TYPE DEFINITIONS */
 // clang-format off
 typedef struct { float x, y; } vec2;
@@ -72,7 +78,6 @@ vec4 vec4_norm(vec4 v);
 mat4 mat4_mult(mat4 m1, mat4 m2);
 vec4 mat4_vec4_mult(mat4 m, vec4 v);
 
-mat4 mat4_identity();
 mat4 mat4_scale(float factor);
 mat4 mat4_look_at(vec3 eye, vec3 center, vec3 up);
 mat4 mat4_perspective(float aspect, float fov, float near, float far);
@@ -80,6 +85,7 @@ mat4 mat4_perspective(float aspect, float fov, float near, float far);
 vec3 calc_barycentric_weights(vec2 p, vec2 tri[3]);
 int is_inside_triangle(vec2 point, vec2 triangle[3], vec3 *bweights);
 
+void load_teapot(size_t *vertex_count, Vertex **vertices);
 int load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices);
 
 void render(const uint32_t vertex_count, const Vertex *vertices,
@@ -97,7 +103,8 @@ int main() {
 
     size_t vertex_count;
     Vertex *vertices;
-    load_obj("./test/suzanne_smooth.obj", &vertex_count, &vertices);
+    // load_obj("./test/teapot_min.obj", &vertex_count, &vertices);
+    load_teapot(&vertex_count, &vertices);
 
     vec3 avg_position = {};
     for (size_t i = 0; i < vertex_count; i++) {
@@ -169,30 +176,14 @@ mat4 mat4_mult(mat4 m1, mat4 m2) {
     vec4 row3 = {m1.col0.w, m1.col1.w, m1.col2.w, m1.col3.w};
 
     return (mat4){
-        {
-            vec4_dot(row0, m2.col0),
-            vec4_dot(row1, m2.col0),
-            vec4_dot(row2, m2.col0),
-            vec4_dot(row3, m2.col0),
-        },
-        {
-            vec4_dot(row0, m2.col1),
-            vec4_dot(row1, m2.col1),
-            vec4_dot(row2, m2.col1),
-            vec4_dot(row3, m2.col1),
-        },
-        {
-            vec4_dot(row0, m2.col2),
-            vec4_dot(row1, m2.col2),
-            vec4_dot(row2, m2.col2),
-            vec4_dot(row3, m2.col2),
-        },
-        {
-            vec4_dot(row0, m2.col3),
-            vec4_dot(row1, m2.col3),
-            vec4_dot(row2, m2.col3),
-            vec4_dot(row3, m2.col3),
-        },
+        {vec4_dot(row0, m2.col0), vec4_dot(row1, m2.col0),
+         vec4_dot(row2, m2.col0), vec4_dot(row3, m2.col0)},
+        {vec4_dot(row0, m2.col1), vec4_dot(row1, m2.col1),
+         vec4_dot(row2, m2.col1), vec4_dot(row3, m2.col1)},
+        {vec4_dot(row0, m2.col2), vec4_dot(row1, m2.col2),
+         vec4_dot(row2, m2.col2), vec4_dot(row3, m2.col2)},
+        {vec4_dot(row0, m2.col3), vec4_dot(row1, m2.col3),
+         vec4_dot(row2, m2.col3), vec4_dot(row3, m2.col3)},
     };
 }
 
@@ -204,10 +195,6 @@ vec4 mat4_vec4_mult(mat4 m, vec4 v) {
 
     return (vec4){vec4_dot(row0, v), vec4_dot(row1, v), vec4_dot(row2, v),
                   vec4_dot(row3, v)};
-}
-
-mat4 mat4_identity() {
-    return (mat4){{1, 0, 0, 0}, {0, 1, 0, 0}, {0, 0, 1, 0}, {0, 0, 0, 1}};
 }
 
 mat4 mat4_scale(float factor) {
@@ -270,6 +257,48 @@ int is_inside_triangle(vec2 point, vec2 triangle[3],
     } else {
         return 0;
     }
+}
+
+void load_teapot(size_t *vertex_count, Vertex **vertices) {
+    // The teapot model data only contains half of the teapot, so we have to
+    // mirror all of the vertices
+    Vertex *verts = malloc(2 * TEAPOT_VERTEX_COUNT * sizeof(*verts));
+
+    for (int i = 0; i < TEAPOT_INDEX_COUNT; i += 3) {
+        for (int j = 0; j < 3; j++) {
+            uint8_t vidx = TEAPOT_INDICES[i + j] * 3;
+
+            Vertex v;
+            v.position.x = TEAPOT_VERTICES[vidx + 0];
+            v.position.y = TEAPOT_VERTICES[vidx + 1];
+            v.position.z = TEAPOT_VERTICES[vidx + 2];
+
+            verts[i + j] = v;
+            v.position.z *= -1;
+
+            // reverse order of mirrored verts to preserve counter-clockwise
+            // winding order
+            verts[i + 2 - j + TEAPOT_INDEX_COUNT] = v;
+        }
+    }
+
+    for (int i = 0; i < 2 * TEAPOT_INDEX_COUNT; i += 3) {
+        vec3 p0 = verts[i].position;
+        vec3 p1 = verts[i + 1].position;
+        vec3 p2 = verts[i + 2].position;
+
+        vec3 v1 = vec3_sub(p1, p0);
+        vec3 v2 = vec3_sub(p2, p0);
+
+        vec3 normal = vec3_norm(vec3_cross(v1, v2));
+
+        verts[i].normal = normal;
+        verts[i + 1].normal = normal;
+        verts[i + 2].normal = normal;
+    }
+
+    *vertex_count = 2 * TEAPOT_INDEX_COUNT;
+    *vertices = verts;
 }
 
 int load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices) {
@@ -444,10 +473,10 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
         depthBuffer[i] = 1.0f;
     }
 
-    mat4 model_mat = mat4_mult(mat4_scale(1.0), mat4_identity());
+    mat4 model_mat = mat4_scale(1.8);
 
     mat4 view_mat =
-        mat4_look_at((vec3){0, 0, 5}, (vec3){0, 0, 0}, (vec3){0, -1, 0});
+        mat4_look_at((vec3){0, 6, 10}, (vec3){0, 0, 0}, (vec3){0, -1, 0});
 
     mat4 projection_mat =
         mat4_perspective((float)width / height, 3.1415 / 4, 0.1f, 500.0f);
@@ -472,7 +501,7 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
 
             if (clip_pos.x < -clip_pos.w || clip_pos.x > clip_pos.w ||
                 clip_pos.y < -clip_pos.w || clip_pos.y > clip_pos.w ||
-                clip_pos.z < -clip_pos.w || clip_pos.x > clip_pos.w) {
+                clip_pos.z < 0 || clip_pos.z > clip_pos.w) {
 
                 shouldClip = 1;
                 break;
@@ -569,14 +598,61 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
                 intensity = fmax(intensity, 0);
                 intensity = fmin(intensity + 0.1, 1);
 
-                set_pixel(colorBuffer, idx, intensity, intensity, intensity, 1);
+                // set_pixel(colorBuffer, idx, intensity, intensity, intensity,
+                // 1);
+
+                // set_pixel(colorBuffer, idx, 1, 1, 1, 1);
+                set_pixel(colorBuffer, idx, nx, ny, nz, 1);
             }
         }
     }
 }
 
-const Vertex demoModelVerts[3] = {
-    {.position = {0, 0, 0}},
-    {.position = {1, 0, 0}},
-    {.position = {0, 1, 0}},
+/* TEAPOT MODEL DATA */
+// Original model data from https://graphics.cs.utah.edu/teapot/
+static const float TEAPOT_VERTICES[TEAPOT_VERTEX_COUNT] = {
+    0.48, 1.95, 0.23, 0.38, 2.04, 0.00, 0.00, 1.65, 0.00, 0.15, 1.65, 0.23,
+    0.59, 1.85, 0.00, 0.30, 1.65, 0.00, 1.43, 2.10, 0.00, 1.48, 1.99, 0.23,
+    1.33, 1.87, 0.00, 0.27, 1.01, 0.00, 0.37, 1.10, 0.23, 0.46, 1.20, 0.00,
+    1.00, 0.75, 0.00, 1.23, 0.47, 0.23, 1.21, 0.32, 0.00, 6.00, 2.25, 0.11,
+    5.80, 2.25, 0.00, 5.83, 2.31, 0.00, 6.13, 2.32, 0.15, 6.20, 2.25, 0.00,
+    6.43, 2.33, 0.00, 5.70, 2.25, 0.00, 6.00, 2.25, 0.19, 6.30, 2.25, 0.00,
+    5.39, 1.65, 0.00, 5.54, 1.47, 0.34, 5.69, 1.29, 0.00, 4.87, 1.37, 0.00,
+    4.76, 0.91, 0.48, 4.96, 0.75, 0.11, 4.97, 0.68, 0.00, 3.00, 3.00, 0.00,
+    2.67, 2.83, 0.00, 2.77, 2.83, 0.23, 3.00, 2.83, 0.33, 2.80, 2.55, 0.00,
+    2.86, 2.55, 0.14, 3.00, 2.55, 0.20, 3.23, 2.83, 0.23, 3.33, 2.83, 0.00,
+    3.14, 2.55, 0.14, 3.20, 2.55, 0.00, 2.17, 2.40, 0.00, 2.42, 2.40, 0.58,
+    3.00, 2.40, 0.82, 1.70, 2.25, 0.00, 2.08, 2.25, 0.92, 3.00, 2.25, 1.30,
+    3.58, 2.40, 0.58, 3.83, 2.40, 0.00, 3.92, 2.25, 0.92, 4.30, 2.25, 0.00,
+    2.01, 2.25, 0.99, 1.60, 2.25, 0.00, 1.60, 2.35, 0.00, 2.01, 2.35, 0.99,
+    3.00, 2.25, 1.40, 3.00, 2.35, 1.40, 1.50, 2.25, 0.00, 1.94, 2.25, 1.06,
+    3.00, 2.25, 1.50, 3.99, 2.25, 0.99, 3.99, 2.35, 0.99, 4.40, 2.25, 0.00,
+    4.40, 2.35, 0.00, 4.06, 2.25, 1.06, 4.50, 2.25, 0.00, 1.70, 1.47, 1.30,
+    3.00, 1.47, 1.84, 1.16, 1.47, 0.00, 1.59, 0.75, 1.41, 3.00, 0.75, 2.00,
+    4.30, 1.47, 1.30, 4.84, 1.47, 0.00, 4.41, 0.75, 1.41, 1.76, 0.23, 1.24,
+    3.00, 0.23, 1.75, 1.25, 0.23, 0.00, 1.50, 0.00, 0.00, 1.94, 0.00, 1.06,
+    3.00, 0.00, 1.50, 4.24, 0.23, 1.24, 4.06, 0.00, 1.06, 4.75, 0.23, 0.00,
+    4.50, 0.00, 0.00,
+};
+
+static const uint8_t TEAPOT_INDICES[TEAPOT_INDEX_COUNT] = {
+    0,  1,  2,  0,  2,  3,  4,  0,  3,  4,  3,  5,  6,  0,  7,  6,  1,  0,  8,
+    7,  0,  8,  0,  4,  3,  2,  9,  3,  9,  10, 5,  3,  10, 5,  10, 11, 12, 10,
+    13, 12, 11, 10, 13, 9,  14, 13, 10, 9,  15, 16, 17, 15, 17, 18, 19, 15, 18,
+    19, 18, 20, 18, 17, 21, 18, 21, 22, 20, 18, 22, 20, 22, 23, 22, 21, 24, 22,
+    24, 25, 23, 22, 25, 23, 25, 26, 27, 28, 25, 27, 25, 24, 29, 25, 28, 29, 26,
+    25, 29, 30, 26, 31, 32, 33, 31, 33, 34, 33, 32, 35, 33, 35, 36, 34, 33, 36,
+    34, 36, 37, 31, 34, 38, 31, 38, 39, 38, 34, 37, 38, 37, 40, 39, 38, 40, 39,
+    40, 41, 36, 35, 42, 36, 42, 43, 37, 36, 43, 37, 43, 44, 43, 42, 45, 43, 45,
+    46, 44, 43, 46, 44, 46, 47, 40, 37, 44, 40, 44, 48, 41, 40, 48, 41, 48, 49,
+    48, 44, 47, 48, 47, 50, 49, 48, 50, 49, 50, 51, 52, 53, 54, 52, 54, 55, 56,
+    52, 55, 56, 55, 57, 55, 54, 58, 55, 58, 59, 57, 55, 59, 57, 59, 60, 61, 56,
+    57, 61, 57, 62, 63, 61, 62, 63, 62, 64, 62, 57, 60, 62, 60, 65, 64, 62, 65,
+    64, 65, 66, 60, 59, 67, 60, 67, 68, 67, 69, 12, 67, 12, 70, 68, 67, 70, 68,
+    70, 71, 7,  58, 6,  7,  59, 58, 7,  67, 59, 7,  8,  69, 7,  69, 67, 65, 60,
+    68, 65, 68, 72, 66, 65, 72, 66, 72, 73, 72, 68, 71, 72, 71, 74, 27, 74, 28,
+    27, 72, 74, 27, 73, 72, 28, 74, 29, 71, 70, 75, 71, 75, 76, 75, 77, 78, 75,
+    78, 79, 76, 75, 79, 76, 79, 80, 13, 70, 12, 13, 75, 70, 13, 14, 77, 13, 77,
+    75, 74, 71, 76, 74, 76, 81, 81, 76, 80, 81, 80, 82, 83, 81, 82, 83, 82, 84,
+    29, 83, 30, 29, 81, 83, 29, 74, 81,
 };

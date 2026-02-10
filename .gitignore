@@ -12,4 +12,8 @@ Icon[]
 *.obj
 
 # testing
+*.dSYM
 test
+
+# vscode
+.vscode

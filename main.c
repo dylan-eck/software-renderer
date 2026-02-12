@@ -2,11 +2,16 @@
  * Single File Software Renderer
  *
  * This is a very basic software renderer that can load and render obj files.
+ *
+ * Things to note:
+ * This is a single threaded program, so large images can take a long time to
+ * render
  */
 
 #include <float.h>
 #include <limits.h>
 #include <math.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -38,6 +43,13 @@
 enum { TEAPOT_VERTEX_COUNT = 255, TEAPOT_INDEX_COUNT = 351 };
 static const float TEAPOT_VERTICES[TEAPOT_VERTEX_COUNT];
 static const uint8_t TEAPOT_INDICES[TEAPOT_INDEX_COUNT];
+
+static const uint32_t WIDTH = 800;
+static const uint32_t HEIGHT = 800;
+
+static const bool WIREFRAME_ENABLED = true;
+
+static const char *OUPUT_FILE_NAME = "out.bmp";
 
 /* TYPE DEFINITIONS */
 // clang-format off
@@ -86,25 +98,26 @@ vec3 calc_barycentric_weights(vec2 p, vec2 tri[3]);
 int is_inside_triangle(vec2 point, vec2 triangle[3], vec3 *bweights);
 
 void load_teapot(size_t *vertex_count, Vertex **vertices);
-int load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices);
+bool load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices);
 
 void render(const uint32_t vertex_count, const Vertex *vertices,
             uint32_t *colorBuffer, float *depthBuffer, const uint32_t width,
             const uint32_t height);
 
 void write_uint32_t_le(uint8_t *buffer, uint32_t data);
-int write_bmp_image(const char *file_name, uint32_t width, uint32_t height,
-                    const uint32_t *pixels);
+bool write_bmp_image(const char *file_name, int32_t width, int32_t height,
+                     const uint32_t *pixels);
 
 /* MAIN */
-int main() {
-    uint32_t width = 1920;
-    uint32_t height = 1080;
-
+int main(int argc, char **argv) {
     size_t vertex_count;
     Vertex *vertices;
-    // load_obj("./test/teapot_min.obj", &vertex_count, &vertices);
-    load_teapot(&vertex_count, &vertices);
+
+    if (argc == 1) {
+        load_teapot(&vertex_count, &vertices);
+    } else if (argc == 2) {
+        load_obj(argv[1], &vertex_count, &vertices);
+    }
 
     vec3 avg_position = {};
     for (size_t i = 0; i < vertex_count; i++) {
@@ -116,13 +129,13 @@ int main() {
         vertices[i].position = vec3_sub(vertices[i].position, avg_position);
     }
 
-    uint32_t *colorBuffer = calloc(width * height, sizeof(*colorBuffer));
-    float *depthBuffer = malloc(width * height * sizeof(*depthBuffer));
-    render(vertex_count, vertices, colorBuffer, depthBuffer, width, height);
+    uint32_t *color_buffer = calloc(WIDTH * HEIGHT, sizeof(*color_buffer));
+    float *depth_buffer = malloc(WIDTH * HEIGHT * sizeof(*depth_buffer));
+    render(vertex_count, vertices, color_buffer, depth_buffer, WIDTH, HEIGHT);
 
-    write_bmp_image("out.bmp", width, height, colorBuffer);
+    write_bmp_image(OUPUT_FILE_NAME, WIDTH, HEIGHT, color_buffer);
 
-    free(colorBuffer);
+    free(color_buffer);
 
     return 0;
 }
@@ -274,8 +287,8 @@ void load_teapot(size_t *vertex_count, Vertex **vertices) {
             v.position.z = TEAPOT_VERTICES[vidx + 2];
 
             verts[i + j] = v;
-            v.position.z *= -1;
 
+            v.position.z *= -1;
             // reverse order of mirrored verts to preserve counter-clockwise
             // winding order
             verts[i + 2 - j + TEAPOT_INDEX_COUNT] = v;
@@ -301,12 +314,12 @@ void load_teapot(size_t *vertex_count, Vertex **vertices) {
     *vertices = verts;
 }
 
-int load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices) {
+bool load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices) {
     FILE *f;
     f = fopen(file_path, "r");
     if (f == NULL) {
-        printf("failed to open file %s\n", file_path);
-        exit(EXIT_FAILURE);
+        printf("failed to open file: %s\n", file_path);
+        return false;
     }
 
     vec3_da vs = {0};
@@ -410,7 +423,7 @@ int load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices) {
     free(line);
     fclose(f);
 
-    return 1;
+    return true;
 }
 
 void write_uint32_t_le(uint8_t *buffer, uint32_t data) {
@@ -420,8 +433,12 @@ void write_uint32_t_le(uint8_t *buffer, uint32_t data) {
     buffer[3] = (data >> 24) & 0xff;
 }
 
-int write_bmp_image(const char *file_name, uint32_t width, uint32_t height,
-                    const uint32_t *pixels) {
+bool write_bmp_image(const char *file_name, int32_t width, int32_t height,
+                     const uint32_t *pixels) {
+    if (width <= 0 || height == 0) {
+        // TODO: print error message here
+        return false;
+    }
 
     static uint32_t header_size = 54;
     uint32_t file_size = header_size + width * height * sizeof(uint32_t);
@@ -449,14 +466,17 @@ int write_bmp_image(const char *file_name, uint32_t width, uint32_t height,
     write_uint32_t_le(&header[34], pixel_data_size);
 
     FILE *f = fopen(file_name, "wb");
-    if (!f) return 1;
+    if (!f) {
+        printf("failed to open output file: %s\n", file_name);
+        return false;
+    };
 
     fwrite(header, sizeof(uint8_t), header_size, f);
     fwrite(pixels, sizeof(uint32_t), width * height, f);
 
     fclose(f);
 
-    return 0;
+    return true;
 }
 
 void set_pixel(uint32_t *pixels, size_t index, float r, float g, float b,
@@ -568,8 +588,9 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
                 depthBuffer[idx] = depth;
 
                 float cutoff = 0.02;
-                if (weights.x < cutoff || weights.y < cutoff ||
-                    weights.z < cutoff) {
+                if (WIREFRAME_ENABLED &&
+                    (weights.x < cutoff || weights.y < cutoff ||
+                     weights.z < cutoff)) {
 
                     set_pixel(colorBuffer, idx, 1, 0, 0, 1);
                     continue;

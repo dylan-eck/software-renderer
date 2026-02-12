@@ -8,15 +8,23 @@
  * render
  */
 
+#ifdef WIN32
+#define _CRT_SECURE_NO_WARNINGS
+#include <BaseTsd.h>
+typedef SSIZE_T ssize_t;
+#else
+#include <unistd.h>
+#endif
+
 #include <float.h>
 #include <limits.h>
 #include <math.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <unistd.h>
 
 /* MACROS */
 #define DARRAY_DEFINE(type, name)                                              \
@@ -38,11 +46,18 @@
         array.items[array.size++] = item;                                      \
     } while (0)
 
+#define DARRAY_FREE(array)                                                     \
+    do {                                                                       \
+        array.capacity = 0;                                                    \
+        array.size = 0;                                                        \
+        free(array.items);                                                     \
+    } while (0);
+
 /* GLOBALS */
 // See the end of this file for teapot model data
 enum { TEAPOT_VERTEX_COUNT = 255, TEAPOT_INDEX_COUNT = 351 };
-static const float TEAPOT_VERTICES[TEAPOT_VERTEX_COUNT];
-static const uint8_t TEAPOT_INDICES[TEAPOT_INDEX_COUNT];
+extern const float TEAPOT_VERTICES[];
+extern const uint8_t TEAPOT_INDICES[];
 
 static const uint32_t WIDTH = 800;
 static const uint32_t HEIGHT = 800;
@@ -117,13 +132,15 @@ int main(int argc, char **argv) {
         load_teapot(&vertex_count, &vertices);
     } else if (argc == 2) {
         load_obj(argv[1], &vertex_count, &vertices);
+    } else {
+        return 1;
     }
 
-    vec3 avg_position = {};
+    vec3 avg_position = {0};
     for (size_t i = 0; i < vertex_count; i++) {
         avg_position = vec3_add(avg_position, vertices[i].position);
     }
-    avg_position = vec3_div(avg_position, vertex_count);
+    avg_position = vec3_div(avg_position, (float)vertex_count);
 
     for (size_t i = 0; i < vertex_count; i++) {
         vertices[i].position = vec3_sub(vertices[i].position, avg_position);
@@ -135,7 +152,9 @@ int main(int argc, char **argv) {
 
     write_bmp_image(OUPUT_FILE_NAME, WIDTH, HEIGHT, color_buffer);
 
+    free(vertices);
     free(color_buffer);
+    free(depth_buffer);
 
     return 0;
 }
@@ -175,8 +194,8 @@ float vec4_dot(vec4 v1, vec4 v2) {
     return v1.x * v2.x + v1.y * v2.y + v1.z * v2.z + v1.w * v2.w;
 }
 
-float vec3_mag(vec3 v) { return sqrt(vec3_dot(v, v)); }
-float vec4_mag(vec4 v) { return sqrt(vec4_dot(v, v)); }
+float vec3_mag(vec3 v) { return sqrtf(vec3_dot(v, v)); }
+float vec4_mag(vec4 v) { return sqrtf(vec4_dot(v, v)); }
 
 vec3 vec3_norm(vec3 v) { return vec3_div(v, vec3_mag(v)); }
 
@@ -275,11 +294,11 @@ int is_inside_triangle(vec2 point, vec2 triangle[3],
 void load_teapot(size_t *vertex_count, Vertex **vertices) {
     // The teapot model data only contains half of the teapot, so we have to
     // mirror all of the vertices
-    Vertex *verts = malloc(2 * TEAPOT_VERTEX_COUNT * sizeof(*verts));
+    Vertex *verts = malloc(2 * TEAPOT_INDEX_COUNT * sizeof(*verts));
 
     for (int i = 0; i < TEAPOT_INDEX_COUNT; i += 3) {
         for (int j = 0; j < 3; j++) {
-            uint8_t vidx = TEAPOT_INDICES[i + j] * 3;
+            int vidx = TEAPOT_INDICES[i + j] * 3;
 
             Vertex v;
             v.position.x = TEAPOT_VERTICES[vidx + 0];
@@ -314,114 +333,110 @@ void load_teapot(size_t *vertex_count, Vertex **vertices) {
     *vertices = verts;
 }
 
+char *obj_parse_indices(char *p, int32_t *v_idx, int32_t *vt_idx,
+                        int32_t *vn_idx) {
+    int32_t idxs[3] = {0};
+
+    int i = 0;
+    do {
+        idxs[i++] = strtol(p, (char **)&p, 10);
+        if (*p == '/') p++;
+    } while (*p != ' ' && *p != '\n' && *p != '\0');
+
+    *v_idx = idxs[0];
+    *vt_idx = idxs[1];
+    *vn_idx = idxs[2];
+
+    return p;
+}
+
 bool load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices) {
-    FILE *f;
-    f = fopen(file_path, "r");
-    if (f == NULL) {
-        printf("failed to open file: %s\n", file_path);
-        return false;
-    }
+    char *start;
+    FILE *fp = fopen(file_path, "rb");
+
+    fseek(fp, 0L, SEEK_END);
+    long flen = ftell(fp);
+    rewind(fp);
+
+    start = malloc(flen + 1);
+
+    size_t n = fread(start, sizeof(start[0]), flen, fp);
+    start[n] = '\0';
+    fclose(fp);
 
     vec3_da vs = {0};
     vec2_da vts = {0};
     vec3_da vns = {0};
-    Vertex_da tris = {0};
+    Vertex_da face_verts = {0};
+    Vertex_da mesh_verts = {0};
 
-    char *line = NULL;
-    size_t len = 0;
-    ssize_t nread;
+    char *p = start;
+    while (*p != '\0') {
+        if (p != start && *(p - 1) != '\n') {
+            p++;
+            continue;
+        };
 
-    while ((nread = getline(&line, &len, f)) != -1) {
-        float x, y, z;
-        sscanf(line + 2, "%f %f %f", &x, &y, &z);
+        if (*p == 'f') {
+            p++;
 
-        if (line[0] == 'f') {
-            char *ptr = strtok(line + 2, " ");
+            face_verts.size = 0;
 
-            int vc = 0;
-            Vertex verts[4];
+            while (*p != '\n' && *p != '\0') {
+                int32_t v, vt, vn;
+                p = obj_parse_indices(p, &v, &vt, &vn);
 
-            while (ptr != NULL) {
-                int32_t nums[3];
-                int num_count = 0;
-                int slash_count = 0;
-                char *p = ptr;
+                Vertex vert;
+                vert.position = vs.items[v - 1];
+                if (vt != 0) vert.uv = vts.items[vt - 1];
+                if (vn != 0) vert.normal = vns.items[vn - 1];
 
-                while (*p && num_count < 3) {
-                    if (*p == '\r' || *p == '\n') break;
-
-                    nums[num_count++] = (int32_t)strtol(p, (char **)&p, 10);
-                    while (*p == '/') {
-                        slash_count++;
-                        p++;
-                    };
-                }
-
-                // TODO: clean this up
-                if (num_count == 1) {
-                    vec3 v = vs.items[nums[0] - 1];
-                    verts[vc++] = (Vertex){.position = v};
-                } else if (num_count == 3) { // v, vn, vt
-                    vec3 v = vs.items[nums[0] - 1];
-                    vec2 vt = vts.items[nums[1] - 1];
-                    vec3 vn = vns.items[nums[2] - 1];
-                    verts[vc++] =
-                        (Vertex){.position = v, .normal = vn, .uv = vt};
-
-                } else if (slash_count == 2) {
-                    vec3 v = vs.items[nums[0] - 1];
-                    vec3 vn = vns.items[nums[1] - 1];
-                    verts[vc++] = (Vertex){.position = v, .normal = vn};
-                } else {
-                    vec3 v = vs.items[nums[0] - 1];
-                    vec2 vt = vts.items[nums[1] - 1];
-
-                    verts[vc++] = (Vertex){.position = v, .uv = vt};
-                }
-
-                ptr = strtok(NULL, " \n");
+                DARRAY_APPEND(face_verts, vert);
             }
 
-            for (int i = 2; i < vc; i++) {
-                DARRAY_APPEND(tris, verts[0]);
-                DARRAY_APPEND(tris, verts[i - 1]);
-                DARRAY_APPEND(tris, verts[i]);
+            for (size_t i = 2; i < face_verts.size; i++) {
+                DARRAY_APPEND(mesh_verts, face_verts.items[0]);
+                DARRAY_APPEND(mesh_verts, face_verts.items[i - 1]);
+                DARRAY_APPEND(mesh_verts, face_verts.items[i]);
             }
-        } else if (line[0] == 'v') {
-            if (line[1] == ' ') {
+        } else if (*p == 'v') {
+            float x, y, z;
+            sscanf(p + 2, "%f %f %f", &x, &y, &z);
+
+            if (*(p + 1) == ' ') {
                 DARRAY_APPEND(vs, ((vec3){x, y, z}));
-            } else if (line[1] == 'n') {
-                DARRAY_APPEND(vns, ((vec3){x, y, z}));
-            } else if (line[1] == 't') {
+            } else if (*(p + 1) == 't') {
                 DARRAY_APPEND(vts, ((vec2){x, y}));
+            } else if (*(p + 1) == 'n') {
+                DARRAY_APPEND(vns, ((vec3){x, y, z}));
             }
         }
+
+        p++;
     }
 
-    free(vs.items);
-    free(vns.items);
-    free(vts.items);
+    free(start);
+    DARRAY_FREE(vs);
+    DARRAY_FREE(vts);
+    DARRAY_FREE(vns);
 
     if (vns.size == 0) {
-        for (int i = 0; i < tris.size; i += 3) {
-            vec3 v0 = tris.items[i].position;
-            vec3 v1 = tris.items[i + 1].position;
-            vec3 v2 = tris.items[i + 2].position;
+        for (size_t i = 0; i < mesh_verts.size; i += 3) {
+            vec3 v0 = mesh_verts.items[i].position;
+            vec3 v1 = mesh_verts.items[i + 1].position;
+            vec3 v2 = mesh_verts.items[i + 2].position;
 
             vec3 normal =
                 vec3_norm(vec3_cross(vec3_sub(v1, v0), vec3_sub(v2, v0)));
 
-            tris.items[i].normal = normal;
-            tris.items[i + 1].normal = normal;
-            tris.items[i + 2].normal = normal;
+            mesh_verts.items[i].normal = normal;
+            mesh_verts.items[i + 1].normal = normal;
+            mesh_verts.items[i + 2].normal = normal;
         }
     }
 
-    *vertices = tris.items;
-    *vertex_count = tris.size;
-
-    free(line);
-    fclose(f);
+    *vertices = mesh_verts.items;
+    *vertex_count = mesh_verts.size;
 
     return true;
 }
@@ -440,12 +455,12 @@ bool write_bmp_image(const char *file_name, int32_t width, int32_t height,
         return false;
     }
 
-    static uint32_t header_size = 54;
-    uint32_t file_size = header_size + width * height * sizeof(uint32_t);
+    enum { HEADER_SIZE = 54 };
+    uint32_t file_size = HEADER_SIZE + width * height * sizeof(uint32_t);
     uint32_t pixel_data_size = width * height * sizeof(uint32_t);
 
-    uint8_t header[header_size];
-    memset(header, 0, header_size);
+    uint8_t header[HEADER_SIZE];
+    memset(header, 0, HEADER_SIZE);
 
     // BMP file identifier
     header[0] = 0x42;
@@ -467,11 +482,11 @@ bool write_bmp_image(const char *file_name, int32_t width, int32_t height,
 
     FILE *f = fopen(file_name, "wb");
     if (!f) {
-        printf("failed to open output file: %s\n", file_name);
+        printf("failed to open output file\n");
         return false;
     };
 
-    fwrite(header, sizeof(uint8_t), header_size, f);
+    fwrite(header, sizeof(uint8_t), HEADER_SIZE, f);
     fwrite(pixels, sizeof(uint32_t), width * height, f);
 
     fclose(f);
@@ -493,13 +508,13 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
         depthBuffer[i] = 1.0f;
     }
 
-    mat4 model_mat = mat4_scale(1.8);
+    mat4 model_mat = mat4_scale(1.8f);
 
     mat4 view_mat =
-        mat4_look_at((vec3){0, 6, 10}, (vec3){0, 0, 0}, (vec3){0, -1, 0});
+        mat4_look_at((vec3){0, 6, 15}, (vec3){0, 0, 0}, (vec3){0, -1, 0});
 
     mat4 projection_mat =
-        mat4_perspective((float)width / height, 3.1415 / 4, 0.1f, 500.0f);
+        mat4_perspective((float)width / height, 3.1415f / 4, 0.1f, 500.0f);
 
     mat4 transform = mat4_mult(mat4_mult(projection_mat, view_mat), model_mat);
 
@@ -508,7 +523,7 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
     vec3 sun_direction = {.x = 0, .y = 1, .z = 0};
     sun_direction = vec3_norm(sun_direction);
 
-    for (int i = 0; i < vertex_count; i += 3) {
+    for (size_t i = 0; i < vertex_count; i += 3) {
         vec2 scr_pos[3];
         float depths[3];
         int shouldClip = 0;
@@ -567,7 +582,8 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
         // TODO: We are checking pixels here that we maybe don't need to check
         for (int ypx = y_start_px; ypx < y_end_px; ypx++) {
             for (int xpx = x_start_px; xpx < x_end_px; xpx++) {
-                if (xpx < 0 || xpx > width || ypx < 0 || ypx > height) {
+                if (xpx < 0 || xpx > (int)width || ypx < 0 ||
+                    ypx > (int)height) {
                     continue;
                 }
 
@@ -587,7 +603,7 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
                 if (depth > depthBuffer[idx]) continue;
                 depthBuffer[idx] = depth;
 
-                float cutoff = 0.02;
+                float cutoff = 0.02f;
                 if (WIREFRAME_ENABLED &&
                     (weights.x < cutoff || weights.y < cutoff ||
                      weights.z < cutoff)) {
@@ -616,8 +632,8 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
                                                   .z = world_normal.z},
                                            sun_direction);
 
-                intensity = fmax(intensity, 0);
-                intensity = fmin(intensity + 0.1, 1);
+                intensity = fmaxf(intensity, 0.0f);
+                intensity = fminf(intensity + 0.2f, 1.0f);
 
                 // set_pixel(colorBuffer, idx, intensity, intensity, intensity,
                 // 1);
@@ -631,32 +647,34 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
 
 /* TEAPOT MODEL DATA */
 // Original model data from https://graphics.cs.utah.edu/teapot/
-static const float TEAPOT_VERTICES[TEAPOT_VERTEX_COUNT] = {
-    0.48, 1.95, 0.23, 0.38, 2.04, 0.00, 0.00, 1.65, 0.00, 0.15, 1.65, 0.23,
-    0.59, 1.85, 0.00, 0.30, 1.65, 0.00, 1.43, 2.10, 0.00, 1.48, 1.99, 0.23,
-    1.33, 1.87, 0.00, 0.27, 1.01, 0.00, 0.37, 1.10, 0.23, 0.46, 1.20, 0.00,
-    1.00, 0.75, 0.00, 1.23, 0.47, 0.23, 1.21, 0.32, 0.00, 6.00, 2.25, 0.11,
-    5.80, 2.25, 0.00, 5.83, 2.31, 0.00, 6.13, 2.32, 0.15, 6.20, 2.25, 0.00,
-    6.43, 2.33, 0.00, 5.70, 2.25, 0.00, 6.00, 2.25, 0.19, 6.30, 2.25, 0.00,
-    5.39, 1.65, 0.00, 5.54, 1.47, 0.34, 5.69, 1.29, 0.00, 4.87, 1.37, 0.00,
-    4.76, 0.91, 0.48, 4.96, 0.75, 0.11, 4.97, 0.68, 0.00, 3.00, 3.00, 0.00,
-    2.67, 2.83, 0.00, 2.77, 2.83, 0.23, 3.00, 2.83, 0.33, 2.80, 2.55, 0.00,
-    2.86, 2.55, 0.14, 3.00, 2.55, 0.20, 3.23, 2.83, 0.23, 3.33, 2.83, 0.00,
-    3.14, 2.55, 0.14, 3.20, 2.55, 0.00, 2.17, 2.40, 0.00, 2.42, 2.40, 0.58,
-    3.00, 2.40, 0.82, 1.70, 2.25, 0.00, 2.08, 2.25, 0.92, 3.00, 2.25, 1.30,
-    3.58, 2.40, 0.58, 3.83, 2.40, 0.00, 3.92, 2.25, 0.92, 4.30, 2.25, 0.00,
-    2.01, 2.25, 0.99, 1.60, 2.25, 0.00, 1.60, 2.35, 0.00, 2.01, 2.35, 0.99,
-    3.00, 2.25, 1.40, 3.00, 2.35, 1.40, 1.50, 2.25, 0.00, 1.94, 2.25, 1.06,
-    3.00, 2.25, 1.50, 3.99, 2.25, 0.99, 3.99, 2.35, 0.99, 4.40, 2.25, 0.00,
-    4.40, 2.35, 0.00, 4.06, 2.25, 1.06, 4.50, 2.25, 0.00, 1.70, 1.47, 1.30,
-    3.00, 1.47, 1.84, 1.16, 1.47, 0.00, 1.59, 0.75, 1.41, 3.00, 0.75, 2.00,
-    4.30, 1.47, 1.30, 4.84, 1.47, 0.00, 4.41, 0.75, 1.41, 1.76, 0.23, 1.24,
-    3.00, 0.23, 1.75, 1.25, 0.23, 0.00, 1.50, 0.00, 0.00, 1.94, 0.00, 1.06,
-    3.00, 0.00, 1.50, 4.24, 0.23, 1.24, 4.06, 0.00, 1.06, 4.75, 0.23, 0.00,
-    4.50, 0.00, 0.00,
+const float TEAPOT_VERTICES[TEAPOT_VERTEX_COUNT] = {
+    0.48f, 1.95f, 0.23f, 0.38f, 2.04f, 0.00f, 0.00f, 1.65f, 0.00f, 0.15f, 1.65f,
+    0.23f, 0.59f, 1.85f, 0.00f, 0.30f, 1.65f, 0.00f, 1.43f, 2.10f, 0.00f, 1.48f,
+    1.99f, 0.23f, 1.33f, 1.87f, 0.00f, 0.27f, 1.01f, 0.00f, 0.37f, 1.10f, 0.23f,
+    0.46f, 1.20f, 0.00f, 1.00f, 0.75f, 0.00f, 1.23f, 0.47f, 0.23f, 1.21f, 0.32f,
+    0.00f, 6.00f, 2.25f, 0.11f, 5.80f, 2.25f, 0.00f, 5.83f, 2.31f, 0.00f, 6.13f,
+    2.32f, 0.15f, 6.20f, 2.25f, 0.00f, 6.43f, 2.33f, 0.00f, 5.70f, 2.25f, 0.00f,
+    6.00f, 2.25f, 0.19f, 6.30f, 2.25f, 0.00f, 5.39f, 1.65f, 0.00f, 5.54f, 1.47f,
+    0.34f, 5.69f, 1.29f, 0.00f, 4.87f, 1.37f, 0.00f, 4.76f, 0.91f, 0.48f, 4.96f,
+    0.75f, 0.11f, 4.97f, 0.68f, 0.00f, 3.00f, 3.00f, 0.00f, 2.67f, 2.83f, 0.00f,
+    2.77f, 2.83f, 0.23f, 3.00f, 2.83f, 0.33f, 2.80f, 2.55f, 0.00f, 2.86f, 2.55f,
+    0.14f, 3.00f, 2.55f, 0.20f, 3.23f, 2.83f, 0.23f, 3.33f, 2.83f, 0.00f, 3.14f,
+    2.55f, 0.14f, 3.20f, 2.55f, 0.00f, 2.17f, 2.40f, 0.00f, 2.42f, 2.40f, 0.58f,
+    3.00f, 2.40f, 0.82f, 1.70f, 2.25f, 0.00f, 2.08f, 2.25f, 0.92f, 3.00f, 2.25f,
+    1.30f, 3.58f, 2.40f, 0.58f, 3.83f, 2.40f, 0.00f, 3.92f, 2.25f, 0.92f, 4.30f,
+    2.25f, 0.00f, 2.01f, 2.25f, 0.99f, 1.60f, 2.25f, 0.00f, 1.60f, 2.35f, 0.00f,
+    2.01f, 2.35f, 0.99f, 3.00f, 2.25f, 1.40f, 3.00f, 2.35f, 1.40f, 1.50f, 2.25f,
+    0.00f, 1.94f, 2.25f, 1.06f, 3.00f, 2.25f, 1.50f, 3.99f, 2.25f, 0.99f, 3.99f,
+    2.35f, 0.99f, 4.40f, 2.25f, 0.00f, 4.40f, 2.35f, 0.00f, 4.06f, 2.25f, 1.06f,
+    4.50f, 2.25f, 0.00f, 1.70f, 1.47f, 1.30f, 3.00f, 1.47f, 1.84f, 1.16f, 1.47f,
+    0.00f, 1.59f, 0.75f, 1.41f, 3.00f, 0.75f, 2.00f, 4.30f, 1.47f, 1.30f, 4.84f,
+    1.47f, 0.00f, 4.41f, 0.75f, 1.41f, 1.76f, 0.23f, 1.24f, 3.00f, 0.23f, 1.75f,
+    1.25f, 0.23f, 0.00f, 1.50f, 0.00f, 0.00f, 1.94f, 0.00f, 1.06f, 3.00f, 0.00f,
+    1.50f, 4.24f, 0.23f, 1.24f, 4.06f, 0.00f, 1.06f, 4.75f, 0.23f, 0.00f, 4.50f,
+    0.00f, 0.00f,
 };
 
-static const uint8_t TEAPOT_INDICES[TEAPOT_INDEX_COUNT] = {
+const uint8_t TEAPOT_INDICES[TEAPOT_INDEX_COUNT] = {
     0,  1,  2,  0,  2,  3,  4,  0,  3,  4,  3,  5,  6,  0,  7,  6,  1,  0,  8,
     7,  0,  8,  0,  4,  3,  2,  9,  3,  9,  10, 5,  3,  10, 5,  10, 11, 12, 10,
     13, 12, 11, 10, 13, 9,  14, 13, 10, 9,  15, 16, 17, 15, 17, 18, 19, 15, 18,

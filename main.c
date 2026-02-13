@@ -8,7 +8,7 @@
  * render
  */
 
-#ifdef WIN32
+#ifdef _WIN32
 #define _CRT_SECURE_NO_WARNINGS
 #include <BaseTsd.h>
 typedef SSIZE_T ssize_t;
@@ -16,6 +16,7 @@ typedef SSIZE_T ssize_t;
 #include <unistd.h>
 #endif
 
+#include <errno.h>
 #include <float.h>
 #include <limits.h>
 #include <math.h>
@@ -106,22 +107,25 @@ mat4 mat4_mult(mat4 m1, mat4 m2);
 vec4 mat4_vec4_mult(mat4 m, vec4 v);
 
 mat4 mat4_scale(float factor);
-mat4 mat4_look_at(vec3 eye, vec3 center, vec3 up);
+mat4 mat4_look_at(vec3 eye, vec3 target, vec3 up);
 mat4 mat4_perspective(float aspect, float fov, float near, float far);
 
 vec3 calc_barycentric_weights(vec2 p, vec2 tri[3]);
-int is_inside_triangle(vec2 point, vec2 triangle[3], vec3 *bweights);
+bool is_inside_triangle(vec2 point, vec2 triangle[3], vec3 *bweights);
 
-void load_teapot(size_t *vertex_count, Vertex **vertices);
-bool load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices);
+void calculate_normals(size_t vertex_count, Vertex *vertices);
+int load_teapot(size_t *vertex_count, Vertex **vertices);
+char *obj_parse_indices(char *p, int32_t *v_idx, int32_t *vt_idx,
+                        int32_t *vn_idx);
+int load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices);
 
 void render(const uint32_t vertex_count, const Vertex *vertices,
             uint32_t *colorBuffer, float *depthBuffer, const uint32_t width,
             const uint32_t height);
 
 void write_uint32_t_le(uint8_t *buffer, uint32_t data);
-bool write_bmp_image(const char *file_name, int32_t width, int32_t height,
-                     const uint32_t *pixels);
+int write_bmp_image(const char *file_name, int32_t width, int32_t height,
+                    const uint32_t *pixels);
 
 /* MAIN */
 int main(int argc, char **argv) {
@@ -129,13 +133,22 @@ int main(int argc, char **argv) {
     Vertex *vertices;
 
     if (argc == 1) {
-        load_teapot(&vertex_count, &vertices);
+        if (load_teapot(&vertex_count, &vertices) != 0) {
+            perror("Error loading teapot model: ");
+            return EXIT_FAILURE;
+        }
     } else if (argc == 2) {
-        load_obj(argv[1], &vertex_count, &vertices);
+        if (load_obj(argv[1], &vertex_count, &vertices) != 0) {
+            fprintf(stderr, "Error loading file %s: %s\n", argv[1],
+                    strerror(errno));
+            return EXIT_FAILURE;
+        }
     } else {
-        return 1;
+        fprintf(stderr, "Error: Invalid command line arguments");
+        return EXIT_FAILURE;
     }
 
+    // center model at origin
     vec3 avg_position = {0};
     for (size_t i = 0; i < vertex_count; i++) {
         avg_position = vec3_add(avg_position, vertices[i].position);
@@ -147,16 +160,29 @@ int main(int argc, char **argv) {
     }
 
     uint32_t *color_buffer = calloc(WIDTH * HEIGHT, sizeof(*color_buffer));
+    if (color_buffer == NULL) {
+        perror("Error allocating color buffer: ");
+        return EXIT_FAILURE;
+    }
+
     float *depth_buffer = malloc(WIDTH * HEIGHT * sizeof(*depth_buffer));
+    if (depth_buffer == NULL) {
+        perror("Error allocating depth buffer: ");
+        return EXIT_FAILURE;
+    }
+
     render(vertex_count, vertices, color_buffer, depth_buffer, WIDTH, HEIGHT);
 
-    write_bmp_image(OUPUT_FILE_NAME, WIDTH, HEIGHT, color_buffer);
+    if (write_bmp_image(OUPUT_FILE_NAME, WIDTH, HEIGHT, color_buffer) != 0) {
+        perror("Error writing output image: ");
+        return EXIT_FAILURE;
+    }
 
     free(vertices);
     free(color_buffer);
     free(depth_buffer);
 
-    return 0;
+    return EXIT_SUCCESS;
 }
 
 /* FUNCTION IMPLEMENTATIONS */
@@ -234,8 +260,8 @@ mat4 mat4_scale(float factor) {
         {factor, 0, 0, 0}, {0, factor, 0, 0}, {0, 0, factor, 0}, {0, 0, 0, 1}};
 }
 
-mat4 mat4_look_at(vec3 eye, vec3 center, vec3 up) {
-    vec3 f = vec3_norm(vec3_sub(center, eye));
+mat4 mat4_look_at(vec3 eye, vec3 target, vec3 up) {
+    vec3 f = vec3_norm(vec3_sub(target, eye));
     vec3 s = vec3_norm(vec3_cross(f, up));
     vec3 u = vec3_cross(s, f);
 
@@ -271,8 +297,8 @@ vec3 calc_barycentric_weights(vec2 p, vec2 tri[3]) {
     return (vec3){xa / xd, xb / xd, xc / xd};
 }
 
-int is_inside_triangle(vec2 point, vec2 triangle[3],
-                       vec3 *barycentric_weights) {
+bool is_inside_triangle(vec2 point, vec2 triangle[3],
+                        vec3 *barycentric_weights) {
 
     vec3 w = calc_barycentric_weights(point, triangle);
 
@@ -285,16 +311,36 @@ int is_inside_triangle(vec2 point, vec2 triangle[3],
             barycentric_weights->y = w.y;
             barycentric_weights->z = w.z;
         }
-        return 1;
+        return true;
     } else {
-        return 0;
+        return false;
     }
 }
 
-void load_teapot(size_t *vertex_count, Vertex **vertices) {
-    // The teapot model data only contains half of the teapot, so we have to
-    // mirror all of the vertices
+void calculate_normals(size_t vertex_count, Vertex *vertices) {
+    for (size_t i = 0; i < vertex_count; i += 3) {
+
+        vec3 p0 = vertices[i].position;
+        vec3 p1 = vertices[i + 1].position;
+        vec3 p2 = vertices[i + 2].position;
+
+        vec3 v1 = vec3_sub(p1, p0);
+        vec3 v2 = vec3_sub(p2, p0);
+
+        vec3 normal = vec3_norm(vec3_cross(v1, v2));
+
+        vertices[i].normal = normal;
+        vertices[i + 1].normal = normal;
+        vertices[i + 2].normal = normal;
+    }
+}
+
+int load_teapot(size_t *vertex_count, Vertex **vertices) {
+    *vertices = NULL;
+    *vertex_count = 0;
+
     Vertex *verts = malloc(2 * TEAPOT_INDEX_COUNT * sizeof(*verts));
+    if (verts == NULL) return -1;
 
     for (int i = 0; i < TEAPOT_INDEX_COUNT; i += 3) {
         for (int j = 0; j < 3; j++) {
@@ -307,6 +353,8 @@ void load_teapot(size_t *vertex_count, Vertex **vertices) {
 
             verts[i + j] = v;
 
+            // The teapot model data only contains half of the teapot, so we
+            // have to mirror all of the vertices
             v.position.z *= -1;
             // reverse order of mirrored verts to preserve counter-clockwise
             // winding order
@@ -314,23 +362,12 @@ void load_teapot(size_t *vertex_count, Vertex **vertices) {
         }
     }
 
-    for (int i = 0; i < 2 * TEAPOT_INDEX_COUNT; i += 3) {
-        vec3 p0 = verts[i].position;
-        vec3 p1 = verts[i + 1].position;
-        vec3 p2 = verts[i + 2].position;
-
-        vec3 v1 = vec3_sub(p1, p0);
-        vec3 v2 = vec3_sub(p2, p0);
-
-        vec3 normal = vec3_norm(vec3_cross(v1, v2));
-
-        verts[i].normal = normal;
-        verts[i + 1].normal = normal;
-        verts[i + 2].normal = normal;
-    }
+    calculate_normals(2 * TEAPOT_INDEX_COUNT, verts);
 
     *vertex_count = 2 * TEAPOT_INDEX_COUNT;
     *vertices = verts;
+
+    return 0;
 }
 
 char *obj_parse_indices(char *p, int32_t *v_idx, int32_t *vt_idx,
@@ -350,15 +387,19 @@ char *obj_parse_indices(char *p, int32_t *v_idx, int32_t *vt_idx,
     return p;
 }
 
-bool load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices) {
-    char *start;
+int load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices) {
+    *vertices = NULL;
+    *vertex_count = 0;
+
     FILE *fp = fopen(file_path, "rb");
+    if (fp == NULL) return -1;
 
     fseek(fp, 0L, SEEK_END);
     long flen = ftell(fp);
     rewind(fp);
 
-    start = malloc(flen + 1);
+    char *start = malloc(flen + 1);
+    if (start == NULL) return -1;
 
     size_t n = fread(start, sizeof(start[0]), flen, fp);
     start[n] = '\0';
@@ -421,24 +462,13 @@ bool load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices) {
     DARRAY_FREE(vns);
 
     if (vns.size == 0) {
-        for (size_t i = 0; i < mesh_verts.size; i += 3) {
-            vec3 v0 = mesh_verts.items[i].position;
-            vec3 v1 = mesh_verts.items[i + 1].position;
-            vec3 v2 = mesh_verts.items[i + 2].position;
-
-            vec3 normal =
-                vec3_norm(vec3_cross(vec3_sub(v1, v0), vec3_sub(v2, v0)));
-
-            mesh_verts.items[i].normal = normal;
-            mesh_verts.items[i + 1].normal = normal;
-            mesh_verts.items[i + 2].normal = normal;
-        }
+        calculate_normals(mesh_verts.size, mesh_verts.items);
     }
 
     *vertices = mesh_verts.items;
     *vertex_count = mesh_verts.size;
 
-    return true;
+    return 0;
 }
 
 void write_uint32_t_le(uint8_t *buffer, uint32_t data) {
@@ -448,12 +478,9 @@ void write_uint32_t_le(uint8_t *buffer, uint32_t data) {
     buffer[3] = (data >> 24) & 0xff;
 }
 
-bool write_bmp_image(const char *file_name, int32_t width, int32_t height,
-                     const uint32_t *pixels) {
-    if (width <= 0 || height == 0) {
-        // TODO: print error message here
-        return false;
-    }
+int write_bmp_image(const char *file_name, int32_t width, int32_t height,
+                    const uint32_t *pixels) {
+    if (width <= 0 || height == 0) return -1;
 
     enum { HEADER_SIZE = 54 };
     uint32_t file_size = HEADER_SIZE + width * height * sizeof(uint32_t);
@@ -480,18 +507,15 @@ bool write_bmp_image(const char *file_name, int32_t width, int32_t height,
     header[28] = 0x20; // bits per pixel
     write_uint32_t_le(&header[34], pixel_data_size);
 
-    FILE *f = fopen(file_name, "wb");
-    if (!f) {
-        printf("failed to open output file\n");
-        return false;
-    };
+    FILE *fp = fopen(file_name, "wb");
+    if (fp == NULL) return -1;
 
-    fwrite(header, sizeof(uint8_t), HEADER_SIZE, f);
-    fwrite(pixels, sizeof(uint32_t), width * height, f);
+    fwrite(header, sizeof(uint8_t), HEADER_SIZE, fp);
+    fwrite(pixels, sizeof(uint32_t), width * height, fp);
 
-    fclose(f);
+    fclose(fp);
 
-    return true;
+    return 0;
 }
 
 void set_pixel(uint32_t *pixels, size_t index, float r, float g, float b,

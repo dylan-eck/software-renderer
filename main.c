@@ -71,6 +71,11 @@ static const char *OUPUT_FILE_NAME = "out.bmp";
 typedef struct {
   float x, y;
 } vec2;
+
+typedef struct {
+  int x, y;
+} ivec2;
+
 typedef struct {
   float x, y, z;
 } vec3;
@@ -91,6 +96,7 @@ typedef struct {
 } Vertex;
 
 DARRAY_DEFINE(vec2, vec2_da);
+DARRAY_DEFINE(ivec2, ivec2_da)
 DARRAY_DEFINE(vec3, vec3_da);
 DARRAY_DEFINE(Vertex, Vertex_da);
 
@@ -393,7 +399,7 @@ char *obj_parse_indices(char *p, int32_t *v_idx, int32_t *vt_idx,
 
   int i = 0;
   do {
-    idxs[i++] = strtol(p, (char **)&p, 10);
+    idxs[i++] = strtol(p, &p, 10);
     if (*p == '/') p++;
   } while (*p != ' ' && *p != '\r' && *p != '\n' && *p != '\0');
 
@@ -472,9 +478,9 @@ int load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices) {
       float x, y, z;
 
       char *tmp = p + 2;
-      x = strtof(tmp, (char **)&tmp);
-      y = strtof(tmp, (char **)&tmp);
-      z = strtof(tmp, (char **)&tmp);
+      x = strtof(tmp, &tmp);
+      y = strtof(tmp, &tmp);
+      z = strtof(tmp, &tmp);
 
       if (*(p + 1) == ' ') {
         DARRAY_APPEND(vs, ((vec3){x, y, z}));
@@ -510,6 +516,80 @@ void set_pixel(uint32_t *pixels, size_t index, float r, float g, float b,
                   ((uint8_t)(g * 255) << 8) | (uint8_t)(b * 255);
 }
 
+ivec2_da line_points(ivec2 p0, ivec2 p1) {
+  ivec2_da points = {0};
+
+  if (abs(p1.x - p0.x) > abs(p1.y - p0.y)) {
+    if (p0.x > p1.x) {
+      int tmp = p0.x;
+      p0.x = p1.x;
+      p1.x = tmp;
+
+      tmp = p0.y;
+      p0.y = p1.y;
+      p1.y = tmp;
+    }
+
+    int dx = p1.x - p0.x;
+    int dy = p1.y - p0.y;
+    int dir = dy < 0 ? -1 : 1;
+    dy *= dir;
+
+    int D = 2 * dy - dx;
+    int y = p0.y;
+
+    for (int x = p0.x; x <= p1.x; x++) {
+      DARRAY_APPEND(points, ((ivec2){x, y}));
+
+      if (D > 0) {
+        y += dir;
+        D -= 2 * dx;
+      }
+      D += 2 * dy;
+    }
+  } else {
+    if (p0.y > p1.y) {
+      int tmp = p0.x;
+      p0.x = p1.x;
+      p1.x = tmp;
+
+      tmp = p0.y;
+      p0.y = p1.y;
+      p1.y = tmp;
+    }
+
+    int dx = p1.x - p0.x;
+    int dy = p1.y - p0.y;
+    int dir = dx < 0 ? -1 : 1;
+    dx *= dir;
+
+    int D = 2 * dy - dx;
+    int x = p0.x;
+
+    for (int y = p0.y; y <= p1.y; y++) {
+      DARRAY_APPEND(points, ((ivec2){x, y}));
+
+      if (D > 0) {
+        x += dir;
+        D -= 2 * dy;
+      }
+      D += 2 * dx;
+    }
+  }
+
+  return points;
+}
+
+int ivec2_comp(const void *a, const void *b) {
+  ivec2 va = *(ivec2 *)a;
+  ivec2 vb = *(ivec2 *)b;
+
+  int v = (va.y > vb.y) - (va.y < vb.y);
+  if (v != 0) return v;
+
+  return (va.x > vb.x) - (va.x < vb.x);
+}
+
 void render(const uint32_t vertex_count, const Vertex *vertices,
             uint32_t *colorBuffer, float *depthBuffer, const uint32_t width,
             const uint32_t height) {
@@ -521,7 +601,7 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
   mat4 model_mat = mat4_scale(1.8f);
 
   mat4 view_mat =
-      mat4_look_at((vec3){0, 6, 150}, (vec3){0, 0, 0}, (vec3){0, -1, 0});
+      mat4_look_at((vec3){0, 3, 6}, (vec3){0, 0, 0}, (vec3){0, -1, 0});
 
   mat4 projection_mat =
       mat4_perspective((float)width / height, 3.1415f / 4, 0.1f, 500.0f);
@@ -534,11 +614,11 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
   sun_direction = vec3_norm(sun_direction);
 
   for (size_t i = 0; i < vertex_count; i += 3) {
-    if ((i * 3) % 1000 == 0) {
-      printf("\r%lu/%u (%.0f%%)", i, vertex_count,
-             100.0f * (float)i / vertex_count);
-      fflush(stdout);
-    }
+    // if ((i * 3) % 10000 == 0) {
+    //   printf("\r%lu/%u (%.0f%%)", i, vertex_count,
+    //          100.0f * (float)i / vertex_count);
+    //   fflush(stdout);
+    // }
 
     vec2 scr_pos[3];
     float depths[3];
@@ -557,7 +637,8 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
         break;
       }
 
-      scr_pos[j] = (vec2){clip_pos.x / clip_pos.w, clip_pos.y / clip_pos.w};
+      scr_pos[j] = (vec2){clip_pos.x / clip_pos.w * 0.5 + 0.5,
+                          clip_pos.y / clip_pos.w * 0.5 + 0.5};
       depths[j] = clip_pos.z / clip_pos.w;
     }
 
@@ -568,91 +649,50 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
                                 vec2_sub(scr_pos[2], scr_pos[0]));
     if (backface < 0) continue;
 
-    // TODO: clean this mess up
-    float scr_x_min = FLT_MAX;
-    float scr_x_max = FLT_MIN;
-    float scr_y_min = FLT_MAX;
-    float scr_y_max = FLT_MIN;
+    // vec3 color = {
+    //     (float)rand() / RAND_MAX,
+    //     (float)rand() / RAND_MAX,
+    //     (float)rand() / RAND_MAX,
+    // };
 
+    ivec2_da edge_points = {0};
     for (int j = 0; j < 3; j++) {
-      if (scr_pos[j].x < scr_x_min) scr_x_min = scr_pos[j].x;
-      if (scr_pos[j].x > scr_x_max) scr_x_max = scr_pos[j].x;
-      if (scr_pos[j].y < scr_y_min) scr_y_min = scr_pos[j].y;
-      if (scr_pos[j].y > scr_y_max) scr_y_max = scr_pos[j].y;
+      ivec2 p0 = {
+          floorf(scr_pos[j].x * width),
+          floorf(scr_pos[j].y * height),
+      };
+
+      ivec2 p1 = {
+          floorf(scr_pos[(j + 1) % 3].x * width),
+          floorf(scr_pos[(j + 1) % 3].y * height),
+      };
+
+      ivec2_da pts = line_points(p0, p1);
+
+      for (int k = 0; k < pts.size; k++) {
+        DARRAY_APPEND(edge_points, pts.items[k]);
+      }
     }
 
-    int x_start_px = floor(((scr_x_min + 1) / 2) * width);
-    if (x_start_px < 0) x_start_px = 0;
+    qsort(edge_points.items, edge_points.size, sizeof(ivec2), ivec2_comp);
 
-    int x_end_px = floor(((scr_x_max + 1) / 2) * width);
-    if (x_end_px >= width) x_end_px = width - 1;
+    for (int k = 0; k < edge_points.size - 1; k++) {
+      ivec2 pt = edge_points.items[k];
 
-    int y_start_px = floor(((scr_y_min + 1) / 2) * height);
-    if (y_start_px < 0) y_start_px = 0;
+      ivec2 pn = edge_points.items[k + 1];
 
-    int y_end_px = floor(((scr_y_max + 1) / 2) * height);
-    if (y_end_px >= height) y_end_px = height - 1;
+      int x = pt.x;
+      while (pt.y == pn.y && x <= pn.x) {
+        vec2 scr_pt = {(float)x / width, (float)pt.y / height};
 
-    // TODO: We are checking pixels here that we maybe don't need to check
-    for (int ypx = y_start_px; ypx < y_end_px; ypx++) {
-      for (int xpx = x_start_px; xpx < x_end_px; xpx++) {
-        if (xpx < 0 || xpx > (int)width || ypx < 0 || ypx > (int)height) {
-          continue;
-        }
+        vec3 weights = barycentric_weights(scr_pt, scr_pos);
 
-        vec2 scr_pt;
-
-        scr_pt.x = -1.0f + (xpx + 0.5f) * pixel_size.x;
-        scr_pt.y = -1.0f + (ypx + 0.5f) * pixel_size.y;
-
-        uint32_t idx = xpx + ypx * width;
-
-        vec3 weights;
-        if (!is_inside_triangle(scr_pt, scr_pos, &weights)) continue;
-
-        float depth = weights.x * depths[0] + weights.y * depths[1] +
-                      weights.z * depths[2];
-
-        if (depth > depthBuffer[idx]) continue;
-        depthBuffer[idx] = depth;
-
-        float cutoff = 0.02f;
-        if (WIREFRAME_ENABLED &&
-            (weights.x < cutoff || weights.y < cutoff || weights.z < cutoff)) {
-
-          set_pixel(colorBuffer, idx, 1, 0, 0, 1);
-          continue;
-        }
-
-        float nx = weights.x * vertices[i + 0].normal.x +
-                   weights.y * vertices[i + 1].normal.x +
-                   weights.z * vertices[i + 2].normal.x;
-
-        float ny = weights.x * vertices[i + 0].normal.y +
-                   weights.y * vertices[i + 1].normal.y +
-                   weights.z * vertices[i + 2].normal.y;
-
-        float nz = weights.x * vertices[i + 0].normal.z +
-                   weights.y * vertices[i + 1].normal.z +
-                   weights.z * vertices[i + 2].normal.z;
-
-        vec4 world_normal = vec4_norm(mat4_vec4_mult(
-            model_mat, (vec4){.x = nx, .y = ny, .z = nz, .w = 0}));
-
-        float intensity = vec3_dot((vec3){.x = world_normal.x,
-                                          .y = world_normal.y,
-                                          .z = world_normal.z},
-                                   sun_direction);
-
-        intensity = fmaxf(intensity, 0.0f);
-        intensity = fminf(intensity + 0.2f, 1.0f);
-
-        // set_pixel(colorBuffer, idx, intensity, intensity, intensity,
-        // 1);
-
-        // set_pixel(colorBuffer, idx, 1, 1, 1, 1);
-        set_pixel(colorBuffer, idx, nx, ny, nz, 1);
+        set_pixel(colorBuffer, x + pt.y * width, weights.x, weights.y,
+                  weights.z, 1);
+        x++;
       }
+
+      // printf("% 5.3f % 5.3f % 5.3f\n", weights.x, weights.y, weights.z);
     }
   }
   printf("\n");
@@ -705,7 +745,8 @@ int write_bmp_image(const char *file_name, int32_t width, int32_t height,
   return 0;
 }
 
-/* TEAPOT MODEL DATA ======================================================== */
+/* TEAPOT MODEL DATA ========================================================
+ */
 // Original model data from https://graphics.cs.utah.edu/teapot/
 const float TEAPOT_VERTICES[TEAPOT_VERTEX_COUNT] = {
     0.48f, 1.95f, 0.23f, 0.38f, 2.04f, 0.00f, 0.00f, 1.65f, 0.00f, 0.15f, 1.65f,

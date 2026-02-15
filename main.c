@@ -687,8 +687,16 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
 
         vec3 weights = barycentric_weights(scr_pt, scr_pos);
 
-        set_pixel(colorBuffer, x + pt.y * width, weights.x, weights.y,
-                  weights.z, 1);
+        float depth = depths[0] * weights.x + depths[1] * weights.y +
+                      depths[2] * weights.z;
+
+        if (depth < depthBuffer[x + pt.y * width]) {
+          depthBuffer[x + pt.y * width] = depth;
+
+          set_pixel(colorBuffer, x + pt.y * width, weights.x, weights.y,
+                    weights.z, 1);
+        };
+
         x++;
       }
 

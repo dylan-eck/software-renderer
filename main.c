@@ -8,14 +8,6 @@
  * render
  */
 
-#ifdef _WIN32
-#define _CRT_SECURE_NO_WARNINGS
-#include <BaseTsd.h>
-typedef SSIZE_T ssize_t;
-#else
-// #include <unistd.h>
-#endif
-
 #include <errno.h>
 #include <float.h>
 #include <limits.h>

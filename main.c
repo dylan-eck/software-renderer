@@ -127,7 +127,7 @@ int load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices);
 void set_pixel(uint32_t *pixels, size_t index, float r, float g, float b,
                float a);
 void render(const uint32_t vertex_count, const Vertex *vertices,
-            uint32_t *colorBuffer, float *depthBuffer, const uint32_t width,
+            uint32_t *color_buffer, float *depth_buffer, const uint32_t width,
             const uint32_t height);
 
 void write_uint32_t_le(uint8_t *buffer, uint32_t data);
@@ -583,17 +583,18 @@ int ivec2_comp(const void *a, const void *b) {
 }
 
 void render(const uint32_t vertex_count, const Vertex *vertices,
-            uint32_t *colorBuffer, float *depthBuffer, const uint32_t width,
+            uint32_t *color_buffer, float *depth_buffer, const uint32_t width,
             const uint32_t height) {
 
   for (size_t i = 0; i < width * height; i++) {
-    depthBuffer[i] = 1.0f;
+    set_pixel(color_buffer, i, 1, 0, 1, 1);
+    depth_buffer[i] = 1.0f;
   }
 
   mat4 model_mat = mat4_scale(1.8f);
 
   mat4 view_mat =
-      mat4_look_at((vec3){0, 3, 6}, (vec3){0, 0, 0}, (vec3){0, -1, 0});
+      mat4_look_at((vec3){0, 0, 6}, (vec3){0, 0, 0}, (vec3){0, -1, 0});
 
   mat4 projection_mat =
       mat4_perspective((float)width / height, 3.1415f / 4, 0.1f, 500.0f);
@@ -682,10 +683,10 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
         float depth = depths[0] * weights.x + depths[1] * weights.y +
                       depths[2] * weights.z;
 
-        if (depth < depthBuffer[x + pt.y * width]) {
-          depthBuffer[x + pt.y * width] = depth;
+        if (depth < depth_buffer[x + pt.y * width]) {
+          depth_buffer[x + pt.y * width] = depth;
 
-          set_pixel(colorBuffer, x + pt.y * width, weights.x, weights.y,
+          set_pixel(color_buffer, x + pt.y * width, weights.x, weights.y,
                     weights.z, 1);
         };
 

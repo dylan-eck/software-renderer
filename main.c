@@ -20,6 +20,9 @@
 #include <time.h>
 
 /* MACROS =================================================================== */
+#define MIN(a, b) (((a) < (b)) ? (a) : (b))
+#define MAX(a, b) (((a) > (b)) ? (a) : (b))
+
 #define DARRAY_DEFINE(type, name)                                              \
   typedef struct {                                                             \
     size_t capacity;                                                           \
@@ -52,8 +55,8 @@ enum { TEAPOT_VERTEX_COUNT = 255, TEAPOT_INDEX_COUNT = 351 };
 extern const float TEAPOT_VERTICES[];
 extern const uint8_t TEAPOT_INDICES[];
 
-static const uint32_t WIDTH = 800;
-static const uint32_t HEIGHT = 800;
+static const uint32_t WIDTH = 1600;
+static const uint32_t HEIGHT = 1600;
 
 static const bool WIREFRAME_ENABLED = false;
 
@@ -114,9 +117,6 @@ vec4 mat4_vec4_mult(mat4 m, vec4 v);
 mat4 mat4_scale(float factor);
 mat4 mat4_look_at(vec3 eye, vec3 target, vec3 up);
 mat4 mat4_perspective(float aspect, float fov, float near, float far);
-
-vec3 barycentric_weights(vec2 p, vec2 tri[3]);
-bool is_inside_triangle(vec2 point, vec2 triangle[3], vec3 *bweights);
 
 void calculate_normals(size_t vertex_count, Vertex *vertices);
 int load_teapot(size_t *vertex_count, Vertex **vertices);
@@ -299,39 +299,6 @@ mat4 mat4_perspective(float aspect, float fov, float near, float far) {
   };
 }
 
-vec3 barycentric_weights(vec2 p, vec2 tri[3]) {
-  vec2 a = tri[0];
-  vec2 b = tri[1];
-  vec2 c = tri[2];
-
-  float xd = vec2_cross(a, b) + vec2_cross(b, c) + vec2_cross(c, a);
-  if (fabsf(xd) < 1e-6f) return (vec3){-1, -1, -1};
-
-  float xa = vec2_cross(b, c) + vec2_cross(p, vec2_sub(b, c));
-  float xb = vec2_cross(c, a) + vec2_cross(p, vec2_sub(c, a));
-  float xc = vec2_cross(a, b) + vec2_cross(p, vec2_sub(a, b));
-
-  return (vec3){xa / xd, xb / xd, xc / xd};
-}
-
-bool is_inside_triangle(vec2 point, vec2 triangle[3], vec3 *bweights) {
-
-  vec3 w = barycentric_weights(point, triangle);
-
-  const float eps = 1e-6f;
-  if (w.x >= -eps && w.y >= -eps && w.z >= -eps && w.x <= 1 + eps &&
-      w.y <= 1 + eps && w.z <= 1 + eps) {
-
-    if (bweights != NULL) {
-      bweights->x = w.x;
-      bweights->y = w.y;
-      bweights->z = w.z;
-    }
-    return true;
-  }
-  return false;
-}
-
 void calculate_normals(size_t vertex_count, Vertex *vertices) {
   for (size_t i = 0; i < vertex_count; i += 3) {
 
@@ -508,78 +475,16 @@ void set_pixel(uint32_t *pixels, size_t index, float r, float g, float b,
                   ((uint8_t)(g * 255) << 8) | (uint8_t)(b * 255);
 }
 
-ivec2_da line_points(ivec2 p0, ivec2 p1) {
-  ivec2_da points = {0};
+int ivec2_cross(ivec2 a, ivec2 b) { return a.x * b.y - b.x * a.y; }
+ivec2 ivec2_sub(ivec2 a, ivec2 b) { return (ivec2){a.x - b.x, a.y - b.y}; }
 
-  if (abs(p1.x - p0.x) > abs(p1.y - p0.y)) {
-    if (p0.x > p1.x) {
-      int tmp = p0.x;
-      p0.x = p1.x;
-      p1.x = tmp;
+bool is_top_left(ivec2 p0, ivec2 p1) {
+  ivec2 delta = ivec2_sub(p1, p0);
 
-      tmp = p0.y;
-      p0.y = p1.y;
-      p1.y = tmp;
-    }
+  bool is_top = delta.y == 0 && delta.x < 0;
+  bool is_left = delta.y > 0;
 
-    int dx = p1.x - p0.x;
-    int dy = p1.y - p0.y;
-    int dir = dy < 0 ? -1 : 1;
-    dy *= dir;
-
-    int D = 2 * dy - dx;
-    int y = p0.y;
-
-    for (int x = p0.x; x <= p1.x; x++) {
-      DARRAY_APPEND(points, ((ivec2){x, y}));
-
-      if (D > 0) {
-        y += dir;
-        D -= 2 * dx;
-      }
-      D += 2 * dy;
-    }
-  } else {
-    if (p0.y > p1.y) {
-      int tmp = p0.x;
-      p0.x = p1.x;
-      p1.x = tmp;
-
-      tmp = p0.y;
-      p0.y = p1.y;
-      p1.y = tmp;
-    }
-
-    int dx = p1.x - p0.x;
-    int dy = p1.y - p0.y;
-    int dir = dx < 0 ? -1 : 1;
-    dx *= dir;
-
-    int D = 2 * dy - dx;
-    int x = p0.x;
-
-    for (int y = p0.y; y <= p1.y; y++) {
-      DARRAY_APPEND(points, ((ivec2){x, y}));
-
-      if (D > 0) {
-        x += dir;
-        D -= 2 * dy;
-      }
-      D += 2 * dx;
-    }
-  }
-
-  return points;
-}
-
-int ivec2_comp(const void *a, const void *b) {
-  ivec2 va = *(ivec2 *)a;
-  ivec2 vb = *(ivec2 *)b;
-
-  int v = (va.y > vb.y) - (va.y < vb.y);
-  if (v != 0) return v;
-
-  return (va.x > vb.x) - (va.x < vb.x);
+  return is_top || is_left;
 }
 
 void render(const uint32_t vertex_count, const Vertex *vertices,
@@ -597,7 +502,7 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
       mat4_look_at((vec3){0, 0, 6}, (vec3){0, 0, 0}, (vec3){0, -1, 0});
 
   mat4 projection_mat =
-      mat4_perspective((float)width / height, 3.1415f / 4, 0.1f, 500.0f);
+      mat4_perspective((float)width / height, 3.1415f / 4, 0.1f, 10.0f);
 
   mat4 transform = mat4_mult(mat4_mult(projection_mat, view_mat), model_mat);
 
@@ -638,62 +543,76 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
     // TODO: clip triangles that are partially inside the viewing volume
     if (shouldClip == 1) continue;
 
-    float backface = vec2_cross(vec2_sub(scr_pos[1], scr_pos[0]),
-                                vec2_sub(scr_pos[2], scr_pos[0]));
-    if (backface < 0) continue;
+    ivec2 p0 = (ivec2){scr_pos[0].x * width, scr_pos[0].y * height};
+    ivec2 p1 = (ivec2){scr_pos[1].x * width, scr_pos[1].y * height};
+    ivec2 p2 = (ivec2){scr_pos[2].x * width, scr_pos[2].y * height};
 
-    // vec3 color = {
-    //     (float)rand() / RAND_MAX,
-    //     (float)rand() / RAND_MAX,
-    //     (float)rand() / RAND_MAX,
-    // };
+    int w0dx = p0.y - p1.y;
+    int w0dy = p1.x - p0.x;
+    int w1dx = p1.y - p2.y;
+    int w1dy = p2.x - p1.x;
+    int w2dx = p2.y - p0.y;
+    int w2dy = p0.x - p2.x;
 
-    ivec2_da edge_points = {0};
-    for (int j = 0; j < 3; j++) {
-      ivec2 p0 = {
-          floorf(scr_pos[j].x * width),
-          floorf(scr_pos[j].y * height),
-      };
+    int xmin = MIN(MIN(p0.x, p1.x), p2.x);
+    int ymin = MIN(MIN(p0.y, p1.y), p2.y);
+    int xmax = MAX(MAX(p0.x, p1.x), p2.x);
+    int ymax = MAX(MAX(p0.y, p1.y), p2.y);
 
-      ivec2 p1 = {
-          floorf(scr_pos[(j + 1) % 3].x * width),
-          floorf(scr_pos[(j + 1) % 3].y * height),
-      };
+    int area = ivec2_cross(ivec2_sub(p1, p0), ivec2_sub(p2, p0));
+    if (area <= 0) continue;
 
-      ivec2_da pts = line_points(p0, p1);
+    int b0 = is_top_left(p0, p1) ? 0 : -1;
+    int b1 = is_top_left(p1, p2) ? 0 : -1;
+    int b2 = is_top_left(p2, p0) ? 0 : -1;
 
-      for (int k = 0; k < pts.size; k++) {
-        DARRAY_APPEND(edge_points, pts.items[k]);
+    ivec2 tl = {xmin, ymin};
+    int w0_0 = ivec2_cross(ivec2_sub(p1, p0), ivec2_sub(tl, p0)) + b0;
+    int w1_0 = ivec2_cross(ivec2_sub(p2, p1), ivec2_sub(tl, p1)) + b1;
+    int w2_0 = ivec2_cross(ivec2_sub(p0, p2), ivec2_sub(tl, p2)) + b2;
+
+    vec3 color = {
+        (float)rand() / RAND_MAX,
+        (float)rand() / RAND_MAX,
+        (float)rand() / RAND_MAX,
+    };
+
+    for (int y = ymin; y <= ymax; y++) {
+      int w0 = w0_0;
+      int w1 = w1_0;
+      int w2 = w2_0;
+      for (int x = xmin; x <= xmax; x++) {
+        if (w0 >= 0 && w1 >= 0 && w2 >= 0) {
+          vec3 weights = {(float)w0 / area, (float)w1 / area, (float)w2 / area};
+
+          float depth = weights.x * depths[0] + weights.y * depths[1] +
+                        weights.z * depths[2];
+          if (depth > depth_buffer[x + y * width]) continue;
+          depth_buffer[x + y * width] = depth;
+
+          float nx = weights.x * vertices[i + 0].normal.x +
+                     weights.y * vertices[i + 1].normal.x +
+                     weights.z * vertices[i + 2].normal.x;
+          float ny = weights.x * vertices[i + 0].normal.y +
+                     weights.y * vertices[i + 1].normal.y +
+                     weights.z * vertices[i + 2].normal.y;
+          float nz = weights.x * vertices[i + 0].normal.z +
+                     weights.y * vertices[i + 1].normal.z +
+                     weights.z * vertices[i + 2].normal.z;
+
+          set_pixel(color_buffer, x + y * width, nx, ny, nz, 1);
+          // set_pixel(color_buffer, x + y * width, color.x, color.y, color.z,
+          // 1);
+        }
+
+        w0 += w0dx;
+        w1 += w1dx;
+        w2 += w2dx;
       }
-    }
 
-    qsort(edge_points.items, edge_points.size, sizeof(ivec2), ivec2_comp);
-
-    for (int k = 0; k < edge_points.size - 1; k++) {
-      ivec2 pt = edge_points.items[k];
-
-      ivec2 pn = edge_points.items[k + 1];
-
-      int x = pt.x;
-      while (pt.y == pn.y && x <= pn.x) {
-        vec2 scr_pt = {(float)x / width, (float)pt.y / height};
-
-        vec3 weights = barycentric_weights(scr_pt, scr_pos);
-
-        float depth = depths[0] * weights.x + depths[1] * weights.y +
-                      depths[2] * weights.z;
-
-        if (depth < depth_buffer[x + pt.y * width]) {
-          depth_buffer[x + pt.y * width] = depth;
-
-          set_pixel(color_buffer, x + pt.y * width, weights.x, weights.y,
-                    weights.z, 1);
-        };
-
-        x++;
-      }
-
-      // printf("% 5.3f % 5.3f % 5.3f\n", weights.x, weights.y, weights.z);
+      w0_0 += w0dy;
+      w1_0 += w1dy;
+      w2_0 += w2dy;
     }
   }
   printf("\n");

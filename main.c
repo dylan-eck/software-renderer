@@ -23,6 +23,10 @@
 #define MIN(a, b) (((a) < (b)) ? (a) : (b))
 #define MAX(a, b) (((a) > (b)) ? (a) : (b))
 
+#define FX_SHAMT 4
+#define FX_MULT (1 << FX_SHAMT)
+#define FX_HALF (FX_MULT >> 1)
+
 #define DARRAY_DEFINE(type, name)                                              \
   typedef struct {                                                             \
     size_t capacity;                                                           \
@@ -70,6 +74,11 @@ typedef struct {
 typedef struct {
   int x, y;
 } ivec2;
+
+typedef struct {
+  int32_t x;
+  int32_t y;
+} fxvec2;
 
 typedef struct {
   float x, y, z;
@@ -491,13 +500,26 @@ void set_pixel(uint32_t *pixels, size_t index, float r, float g, float b,
 int ivec2_cross(ivec2 a, ivec2 b) { return a.x * b.y - b.x * a.y; }
 ivec2 ivec2_sub(ivec2 a, ivec2 b) { return (ivec2){a.x - b.x, a.y - b.y}; }
 
-bool is_top_left(ivec2 p0, ivec2 p1) {
-  ivec2 delta = ivec2_sub(p1, p0);
+bool is_top_left(vec2 p0, vec2 p1) {
+  vec2 delta = vec2_sub(p1, p0);
 
   bool is_top = delta.y == 0 && delta.x < 0;
   bool is_left = delta.y > 0;
 
   return is_top || is_left;
+}
+
+mat4 rotate_z(float theta) {
+  return (mat4){
+      (vec4){cosf(theta), sinf(theta), 0, 0},
+      (vec4){-sinf(theta), cosf(theta), 0, 0},
+      (vec4){0, 0, 1, 0},
+      (vec4){0, 0, 0, 1},
+  };
+}
+
+float signed_area(vec2 a, vec2 b, vec2 c) {
+  return vec2_cross(vec2_sub(c, a), vec2_sub(b, a));
 }
 
 void render(const uint32_t vertex_count, const Vertex *vertices,
@@ -510,7 +532,8 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
     depth_buffer[i] = 1.0f;
   }
 
-  mat4 model_mat = mat4_scale(1.8f);
+  // mat4 model_mat = mat4_scale(1.0f);
+  mat4 model_mat = rotate_z(0.2f);
 
   mat4 view_mat =
       mat4_look_at((vec3){0, 0, 10}, (vec3){0, 0, 0}, (vec3){0, -1, 0});
@@ -558,25 +581,37 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
     // TODO: clip triangles that are partially inside the viewing volume
     if (shouldClip == 1) continue;
 
-    ivec2 p0 = (ivec2){scr_pos[0].x * width, scr_pos[0].y * height};
-    ivec2 p1 = (ivec2){scr_pos[1].x * width, scr_pos[1].y * height};
-    ivec2 p2 = (ivec2){scr_pos[2].x * width, scr_pos[2].y * height};
+    vec2 p0 = (vec2){scr_pos[0].x * width, scr_pos[0].y * height};
+    vec2 p1 = (vec2){scr_pos[1].x * width, scr_pos[1].y * height};
+    vec2 p2 = (vec2){scr_pos[2].x * width, scr_pos[2].y * height};
 
     // printf("%d %d | %d %d | %d %d\n", p0.x, p0.y, p1.x, p1.y, p2.x, p2.y);
+    printf("%f %f | %f %f | %f %f\n", p0.x, p0.y, p1.x, p1.y, p2.x, p2.y);
 
-    int area = ivec2_cross(ivec2_sub(p2, p0), ivec2_sub(p1, p0));
+    // float area = vec2_cross(vec2_sub(p2, p0), vec2_sub(p1, p0));.
+    float area = signed_area(p0, p1, p2);
+
     if (area <= 0) continue;
 
-    int xmin = MIN(MIN(p0.x, p1.x), p2.x);
-    int ymin = MIN(MIN(p0.y, p1.y), p2.y);
-    int xmax = MAX(MAX(p0.x, p1.x), p2.x);
-    int ymax = MAX(MAX(p0.y, p1.y), p2.y);
+    printf("%f\n", area);
 
-    int b0 = is_top_left(p1, p2);
-    int b1 = is_top_left(p2, p0);
-    int b2 = is_top_left(p0, p1);
+    int xmin = floorf(MIN(MIN(p0.x, p1.x), p2.x));
+    int ymin = floorf(MIN(MIN(p0.y, p1.y), p2.y));
+    int xmax = ceilf(MAX(MAX(p0.x, p1.x), p2.x));
+    int ymax = ceilf(MAX(MAX(p0.y, p1.y), p2.y));
 
-    vec3 color = {
+    printf("triangle bbox:\n");
+    printf("  x: %d %d\n", xmin, xmax);
+    printf("  y: %d %d\n", ymin, ymax);
+
+    float b0 = is_top_left(p1, p2) ? 0 : -1;
+    float b1 = is_top_left(p2, p0) ? 0 : -1;
+    float b2 = is_top_left(p0, p1) ? 0 : -1;
+
+    printf("biases:\n");
+    printf("  %f %f %f\n", b0, b1, b2);
+
+    vec3 rand_color = {
         (float)rand() / RAND_MAX,
         (float)rand() / RAND_MAX,
         (float)rand() / RAND_MAX,
@@ -584,13 +619,16 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
 
     for (int y = ymin; y <= ymax; y++) {
       for (int x = xmin; x <= xmax; x++) {
-        ivec2 p = {x, y};
-        int w0 = ivec2_cross(ivec2_sub(p, p0), ivec2_sub(p1, p0)) + b0;
-        int w1 = ivec2_cross(ivec2_sub(p, p1), ivec2_sub(p2, p1)) + b1;
-        int w2 = ivec2_cross(ivec2_sub(p, p2), ivec2_sub(p0, p2)) + b2;
+        vec2 p = {x + 0.5, y + 0.5};
+        float w0 = signed_area(p0, p1, p) + b0;
+        float w1 = signed_area(p1, p2, p) + b1;
+        float w2 = signed_area(p2, p0, p) + b2;
 
         if (w0 >= 0 && w1 >= 0 && w2 >= 0) {
-          set_pixel(color_buffer, x + y * width, color.x, color.y, color.z, 1);
+          // set_pixel(color_buffer, x + y * width, rand_color.x, rand_color.y,
+          //           rand_color.z, 1);
+          set_pixel(color_buffer, x + y * width, w0 / area, w1 / area,
+                    w2 / area, 1);
           // set_pixel(color_buffer, x + y * width, 1, 0, 0, 1);
         }
       }

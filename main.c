@@ -55,8 +55,8 @@ enum { TEAPOT_VERTEX_COUNT = 255, TEAPOT_INDEX_COUNT = 351 };
 extern const float TEAPOT_VERTICES[];
 extern const uint8_t TEAPOT_INDICES[];
 
-static const uint32_t WIDTH = 1600;
-static const uint32_t HEIGHT = 1600;
+static const uint32_t WIDTH = 64;
+static const uint32_t HEIGHT = 64;
 
 static const bool WIREFRAME_ENABLED = false;
 
@@ -136,6 +136,8 @@ int write_bmp_image(const char *file_name, int32_t width, int32_t height,
 
 /* MAIN ===================================================================== */
 int main(int argc, char **argv) {
+  srand(time(NULL));
+
   size_t vertex_count;
   Vertex *vertices;
 
@@ -180,7 +182,18 @@ int main(int argc, char **argv) {
     return EXIT_FAILURE;
   }
 
-  render(vertex_count, vertices, color_buffer, depth_buffer, WIDTH, HEIGHT);
+  Vertex test_verts[] = {
+      (Vertex){.position = (vec3){0, -2, 0}},
+      (Vertex){.position = (vec3){2, 0, 0}},
+      (Vertex){.position = (vec3){2, -2, 0}},
+
+      (Vertex){.position = (vec3){0, -2, 0}},
+      (Vertex){.position = (vec3){-1, 1, 0}},
+      (Vertex){.position = (vec3){2, 0, 0}},
+  };
+
+  // render(vertex_count, vertices, color_buffer, depth_buffer, WIDTH, HEIGHT);
+  render(6, test_verts, color_buffer, depth_buffer, WIDTH, HEIGHT);
 
   if (write_bmp_image(OUPUT_FILE_NAME, WIDTH, HEIGHT, color_buffer) != 0) {
     perror("Error writing output image: ");
@@ -279,21 +292,21 @@ mat4 mat4_scale(float factor) {
 
 mat4 mat4_look_at(vec3 eye, vec3 target, vec3 up) {
   vec3 f = vec3_norm(vec3_sub(target, eye));
-  vec3 s = vec3_norm(vec3_cross(f, up));
-  vec3 u = vec3_cross(s, f);
+  vec3 s = vec3_norm(vec3_cross(up, f));
+  vec3 u = vec3_cross(f, s);
 
-  return (mat4){
-      {s.x, u.x, -f.x, 0},
-      {s.y, u.y, -f.y, 0},
-      {s.z, u.z, -f.z, 0},
-      {-vec3_dot(s, eye), -vec3_dot(u, eye), vec3_dot(f, eye), 1},
-  };
+  mat4 m;
+  m.col0 = (vec4){s.x, s.y, s.z, 0};
+  m.col1 = (vec4){u.x, u.y, u.z, 0};
+  m.col2 = (vec4){-f.x, -f.y, -f.z, 0};
+  m.col3 = (vec4){-vec3_dot(s, eye), -vec3_dot(u, eye), vec3_dot(f, eye), 1};
+  return m;
 }
 
 mat4 mat4_perspective(float aspect, float fov, float near, float far) {
   return (mat4){
       {1 / (aspect * tanf(fov / 2)), 0, 0, 0},
-      {0, 1 / tanf(fov / 2), 0, 0},
+      {0, -1 / tanf(fov / 2), 0, 0},
       {0, 0, far / (near - far), -1},
       {0, 0, -far * near / (far - near), 0},
   };
@@ -492,21 +505,20 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
             const uint32_t height) {
 
   for (size_t i = 0; i < width * height; i++) {
-    set_pixel(color_buffer, i, 1, 0, 1, 1);
+    // set_pixel(color_buffer, i, 1, 0, 1, 1);
+    set_pixel(color_buffer, i, 0, 0, 0, 1);
     depth_buffer[i] = 1.0f;
   }
 
   mat4 model_mat = mat4_scale(1.8f);
 
   mat4 view_mat =
-      mat4_look_at((vec3){0, 0, 6}, (vec3){0, 0, 0}, (vec3){0, -1, 0});
+      mat4_look_at((vec3){0, 0, 10}, (vec3){0, 0, 0}, (vec3){0, -1, 0});
 
   mat4 projection_mat =
-      mat4_perspective((float)width / height, 3.1415f / 4, 0.1f, 10.0f);
+      mat4_perspective((float)width / height, 3.1415f / 4, 0.1f, 500.0f);
 
   mat4 transform = mat4_mult(mat4_mult(projection_mat, view_mat), model_mat);
-
-  vec2 pixel_size = {.x = 2.0f / width, .y = 2.0f / height};
 
   vec3 sun_direction = {.x = 0, .y = 1, .z = 0};
   sun_direction = vec3_norm(sun_direction);
@@ -526,6 +538,9 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
       vec3 pos = vertices[i + j].position;
 
       vec4 clip_pos = mat4_vec4_mult(transform, (vec4){pos.x, pos.y, pos.z, 1});
+
+      // printf("% 5.3f % 5.3f % 5.3f % 5.3f\n", clip_pos.x, clip_pos.y,
+      //        clip_pos.z, clip_pos.w);
 
       if (clip_pos.x < -clip_pos.w || clip_pos.x > clip_pos.w ||
           clip_pos.y < -clip_pos.w || clip_pos.y > clip_pos.w ||
@@ -547,29 +562,19 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
     ivec2 p1 = (ivec2){scr_pos[1].x * width, scr_pos[1].y * height};
     ivec2 p2 = (ivec2){scr_pos[2].x * width, scr_pos[2].y * height};
 
-    int w0dx = p0.y - p1.y;
-    int w0dy = p1.x - p0.x;
-    int w1dx = p1.y - p2.y;
-    int w1dy = p2.x - p1.x;
-    int w2dx = p2.y - p0.y;
-    int w2dy = p0.x - p2.x;
+    // printf("%d %d | %d %d | %d %d\n", p0.x, p0.y, p1.x, p1.y, p2.x, p2.y);
+
+    int area = ivec2_cross(ivec2_sub(p2, p0), ivec2_sub(p1, p0));
+    if (area <= 0) continue;
 
     int xmin = MIN(MIN(p0.x, p1.x), p2.x);
     int ymin = MIN(MIN(p0.y, p1.y), p2.y);
     int xmax = MAX(MAX(p0.x, p1.x), p2.x);
     int ymax = MAX(MAX(p0.y, p1.y), p2.y);
 
-    int area = ivec2_cross(ivec2_sub(p1, p0), ivec2_sub(p2, p0));
-    if (area <= 0) continue;
-
-    int b0 = is_top_left(p0, p1) ? 0 : -1;
-    int b1 = is_top_left(p1, p2) ? 0 : -1;
-    int b2 = is_top_left(p2, p0) ? 0 : -1;
-
-    ivec2 tl = {xmin, ymin};
-    int w0_0 = ivec2_cross(ivec2_sub(p1, p0), ivec2_sub(tl, p0)) + b0;
-    int w1_0 = ivec2_cross(ivec2_sub(p2, p1), ivec2_sub(tl, p1)) + b1;
-    int w2_0 = ivec2_cross(ivec2_sub(p0, p2), ivec2_sub(tl, p2)) + b2;
+    int b0 = is_top_left(p1, p2);
+    int b1 = is_top_left(p2, p0);
+    int b2 = is_top_left(p0, p1);
 
     vec3 color = {
         (float)rand() / RAND_MAX,
@@ -578,41 +583,17 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
     };
 
     for (int y = ymin; y <= ymax; y++) {
-      int w0 = w0_0;
-      int w1 = w1_0;
-      int w2 = w2_0;
       for (int x = xmin; x <= xmax; x++) {
+        ivec2 p = {x, y};
+        int w0 = ivec2_cross(ivec2_sub(p, p0), ivec2_sub(p1, p0)) + b0;
+        int w1 = ivec2_cross(ivec2_sub(p, p1), ivec2_sub(p2, p1)) + b1;
+        int w2 = ivec2_cross(ivec2_sub(p, p2), ivec2_sub(p0, p2)) + b2;
+
         if (w0 >= 0 && w1 >= 0 && w2 >= 0) {
-          vec3 weights = {(float)w0 / area, (float)w1 / area, (float)w2 / area};
-
-          float depth = weights.x * depths[0] + weights.y * depths[1] +
-                        weights.z * depths[2];
-          if (depth > depth_buffer[x + y * width]) continue;
-          depth_buffer[x + y * width] = depth;
-
-          float nx = weights.x * vertices[i + 0].normal.x +
-                     weights.y * vertices[i + 1].normal.x +
-                     weights.z * vertices[i + 2].normal.x;
-          float ny = weights.x * vertices[i + 0].normal.y +
-                     weights.y * vertices[i + 1].normal.y +
-                     weights.z * vertices[i + 2].normal.y;
-          float nz = weights.x * vertices[i + 0].normal.z +
-                     weights.y * vertices[i + 1].normal.z +
-                     weights.z * vertices[i + 2].normal.z;
-
-          set_pixel(color_buffer, x + y * width, nx, ny, nz, 1);
-          // set_pixel(color_buffer, x + y * width, color.x, color.y, color.z,
-          // 1);
+          set_pixel(color_buffer, x + y * width, color.x, color.y, color.z, 1);
+          // set_pixel(color_buffer, x + y * width, 1, 0, 0, 1);
         }
-
-        w0 += w0dx;
-        w1 += w1dx;
-        w2 += w2dx;
       }
-
-      w0_0 += w0dy;
-      w1_0 += w1dy;
-      w2_0 += w2dy;
     }
   }
   printf("\n");

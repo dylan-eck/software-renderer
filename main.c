@@ -6,6 +6,11 @@
  * Things to note:
  * This is a single threaded program, so large images can take a long time to
  * render
+ *
+ * Helpful Resources:
+ * https://kristoffer-dyrkorn.github.io/triangle-rasterizer/
+ * https://stackoverflow.com/questions/10067510/fixed-point-arithmetic-in-c-programming
+ * https://stackoverflow.com/questions/24441631/how-exactly-does-opengl-do-perspectively-correct-linear-interpolation
  */
 
 #include <errno.h>
@@ -26,6 +31,7 @@
 #define FX_SHAMT 4
 #define FX_MULT (1 << FX_SHAMT)
 #define FX_HALF (FX_MULT >> 1)
+#define FX_MASK ((1 << FX_SHAMT) - 1)
 
 #define DARRAY_DEFINE(type, name)                                              \
   typedef struct {                                                             \
@@ -59,8 +65,8 @@ enum { TEAPOT_VERTEX_COUNT = 255, TEAPOT_INDEX_COUNT = 351 };
 extern const float TEAPOT_VERTICES[];
 extern const uint8_t TEAPOT_INDICES[];
 
-static const uint32_t WIDTH = 64;
-static const uint32_t HEIGHT = 64;
+static const uint32_t WIDTH = 800;
+static const uint32_t HEIGHT = 800;
 
 static const bool WIREFRAME_ENABLED = false;
 
@@ -201,8 +207,8 @@ int main(int argc, char **argv) {
       (Vertex){.position = (vec3){2, 0, 0}},
   };
 
-  // render(vertex_count, vertices, color_buffer, depth_buffer, WIDTH, HEIGHT);
-  render(6, test_verts, color_buffer, depth_buffer, WIDTH, HEIGHT);
+  render(vertex_count, vertices, color_buffer, depth_buffer, WIDTH, HEIGHT);
+  // render(6, test_verts, color_buffer, depth_buffer, WIDTH, HEIGHT);
 
   if (write_bmp_image(OUPUT_FILE_NAME, WIDTH, HEIGHT, color_buffer) != 0) {
     perror("Error writing output image: ");
@@ -531,6 +537,14 @@ bool is_top_left(fxvec2 p0, fxvec2 p1) {
   return is_top || is_left;
 }
 
+fxvec2 fxvec2_create(float x, float y) {
+  return (fxvec2){roundf(x * FX_MULT), roundf(y * FX_MULT)};
+}
+
+float fx_to_float(int32_t n) {
+  return (n >> FX_SHAMT) + (float)(n & FX_MASK) / (1 << FX_SHAMT);
+}
+
 void render(const uint32_t vertex_count, const Vertex *vertices,
             uint32_t *color_buffer, float *depth_buffer, const uint32_t width,
             const uint32_t height) {
@@ -545,7 +559,7 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
   mat4 model_mat = rotate_z(0.2f);
 
   mat4 view_mat =
-      mat4_look_at((vec3){0, 0, 10}, (vec3){0, 0, 0}, (vec3){0, -1, 0});
+      mat4_look_at((vec3){0, 0, 0.6}, (vec3){0, 0, 0}, (vec3){0, -1, 0});
 
   mat4 projection_mat =
       mat4_perspective((float)width / height, 3.1415f / 4, 0.1f, 500.0f);
@@ -590,24 +604,13 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
     // TODO: clip triangles that are partially inside the viewing volume
     if (shouldClip == 1) continue;
 
-    fxvec2 p_a = {
-        roundf(scr_pos[0].x * width * FX_MULT),
-        roundf(scr_pos[0].y * height * FX_MULT),
-    };
+    fxvec2 p_a = fxvec2_create(scr_pos[0].x * width, scr_pos[0].y * height);
+    fxvec2 p_b = fxvec2_create(scr_pos[1].x * width, scr_pos[1].y * height);
+    fxvec2 p_2 = fxvec2_create(scr_pos[2].x * width, scr_pos[2].y * height);
 
-    fxvec2 p_b = {
-        roundf(scr_pos[1].x * width * FX_MULT),
-        roundf(scr_pos[1].y * height * FX_MULT),
-    };
+    int32_t area = fx_signed_area(p_a, p_b, p_2);
 
-    fxvec2 p_2 = {
-        roundf(scr_pos[2].x * width * FX_MULT),
-        roundf(scr_pos[2].y * height * FX_MULT),
-    };
-
-    int32_t fx_area = fx_signed_area(p_a, p_b, p_2);
-
-    if (fx_area <= 0) continue;
+    if (area <= 0) continue;
 
     int xmin = MIN(MIN(p_a.x, p_b.x), p_2.x) >> FX_SHAMT;
     int ymin = MIN(MIN(p_a.y, p_b.y), p_2.y) >> FX_SHAMT;
@@ -618,30 +621,33 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
     float b1 = is_top_left(p_2, p_a) ? 0 : -1;
     float b2 = is_top_left(p_a, p_b) ? 0 : -1;
 
-    vec3 rand_color = {
-        (float)rand() / RAND_MAX,
-        (float)rand() / RAND_MAX,
-        (float)rand() / RAND_MAX,
-    };
+    vec3 rand_color = {(float)rand() / RAND_MAX, (float)rand() / RAND_MAX,
+                       (float)rand() / RAND_MAX};
 
     for (int y = ymin; y <= ymax; y++) {
       for (int x = xmin; x <= xmax; x++) {
         fxvec2 p = {(x << FX_SHAMT) + FX_HALF, (y << FX_SHAMT) + FX_HALF};
 
-        float w0 = fx_signed_area(p_a, p_b, p) + b0;
-        float w1 = fx_signed_area(p_b, p_2, p) + b1;
-        float w2 = fx_signed_area(p_2, p_a, p) + b2;
+        int32_t w0 = fx_signed_area(p_a, p_b, p) + b0;
+        int32_t w1 = fx_signed_area(p_b, p_2, p) + b1;
+        int32_t w2 = fx_signed_area(p_2, p_a, p) + b2;
 
         if (w0 >= 0 && w1 >= 0 && w2 >= 0) {
-          set_pixel(color_buffer, x + y * width, rand_color.x, rand_color.y,
-                    rand_color.z, 1);
-          // set_pixel(color_buffer, x + y * width, w0 / area, w1 / area,
-          //           w2 / area, 1);
+          w0 = (int64_t)(w0 << FX_SHAMT) / area;
+          w1 = (int64_t)(w1 << FX_SHAMT) / area;
+          w2 = (int64_t)(w2 << FX_SHAMT) / area;
+
+          float w0n = fx_to_float(w0);
+          float w1n = fx_to_float(w1);
+          float w2n = fx_to_float(w2);
+
+          // set_pixel(color_buffer, x + y * width, rand_color.x, rand_color.y,
+          //           rand_color.z, 1);
+          set_pixel(color_buffer, x + y * width, w0n, w1n, w2n, 1);
           // set_pixel(color_buffer, x + y * width, 1, 0, 0, 1);
         }
       }
     }
-    printf("\n");
   }
   printf("\n");
 }

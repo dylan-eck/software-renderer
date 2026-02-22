@@ -500,15 +500,6 @@ void set_pixel(uint32_t *pixels, size_t index, float r, float g, float b,
 int ivec2_cross(ivec2 a, ivec2 b) { return a.x * b.y - b.x * a.y; }
 ivec2 ivec2_sub(ivec2 a, ivec2 b) { return (ivec2){a.x - b.x, a.y - b.y}; }
 
-bool is_top_left(vec2 p0, vec2 p1) {
-  vec2 delta = vec2_sub(p1, p0);
-
-  bool is_top = delta.y == 0 && delta.x < 0;
-  bool is_left = delta.y > 0;
-
-  return is_top || is_left;
-}
-
 mat4 rotate_z(float theta) {
   return (mat4){
       (vec4){cosf(theta), sinf(theta), 0, 0},
@@ -520,6 +511,24 @@ mat4 rotate_z(float theta) {
 
 float signed_area(vec2 a, vec2 b, vec2 c) {
   return vec2_cross(vec2_sub(c, a), vec2_sub(b, a));
+}
+
+fxvec2 fxvec2_sub(fxvec2 a, fxvec2 b) { return (fxvec2){a.x - b.x, a.y - b.y}; }
+int32_t fxvec2_cross(fxvec2 a, fxvec2 b) {
+  return (a.x * b.y - b.x * a.y) >> FX_SHAMT;
+}
+
+int32_t fx_signed_area(fxvec2 a, fxvec2 b, fxvec2 c) {
+  return fxvec2_cross(fxvec2_sub(c, a), fxvec2_sub(b, a));
+}
+
+bool is_top_left(fxvec2 p0, fxvec2 p1) {
+  fxvec2 delta = fxvec2_sub(p1, p0);
+
+  bool is_top = delta.y == 0 && delta.x < 0;
+  bool is_left = delta.y > 0;
+
+  return is_top || is_left;
 }
 
 void render(const uint32_t vertex_count, const Vertex *vertices,
@@ -581,35 +590,33 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
     // TODO: clip triangles that are partially inside the viewing volume
     if (shouldClip == 1) continue;
 
-    vec2 p0 = (vec2){scr_pos[0].x * width, scr_pos[0].y * height};
-    vec2 p1 = (vec2){scr_pos[1].x * width, scr_pos[1].y * height};
-    vec2 p2 = (vec2){scr_pos[2].x * width, scr_pos[2].y * height};
+    fxvec2 p_a = {
+        roundf(scr_pos[0].x * width * FX_MULT),
+        roundf(scr_pos[0].y * height * FX_MULT),
+    };
 
-    // printf("%d %d | %d %d | %d %d\n", p0.x, p0.y, p1.x, p1.y, p2.x, p2.y);
-    printf("%f %f | %f %f | %f %f\n", p0.x, p0.y, p1.x, p1.y, p2.x, p2.y);
+    fxvec2 p_b = {
+        roundf(scr_pos[1].x * width * FX_MULT),
+        roundf(scr_pos[1].y * height * FX_MULT),
+    };
 
-    // float area = vec2_cross(vec2_sub(p2, p0), vec2_sub(p1, p0));.
-    float area = signed_area(p0, p1, p2);
+    fxvec2 p_2 = {
+        roundf(scr_pos[2].x * width * FX_MULT),
+        roundf(scr_pos[2].y * height * FX_MULT),
+    };
 
-    if (area <= 0) continue;
+    int32_t fx_area = fx_signed_area(p_a, p_b, p_2);
 
-    printf("%f\n", area);
+    if (fx_area <= 0) continue;
 
-    int xmin = floorf(MIN(MIN(p0.x, p1.x), p2.x));
-    int ymin = floorf(MIN(MIN(p0.y, p1.y), p2.y));
-    int xmax = ceilf(MAX(MAX(p0.x, p1.x), p2.x));
-    int ymax = ceilf(MAX(MAX(p0.y, p1.y), p2.y));
+    int xmin = MIN(MIN(p_a.x, p_b.x), p_2.x) >> FX_SHAMT;
+    int ymin = MIN(MIN(p_a.y, p_b.y), p_2.y) >> FX_SHAMT;
+    int xmax = (MAX(MAX(p_a.x, p_b.x), p_2.x) + (1 << FX_SHAMT)) >> FX_SHAMT;
+    int ymax = (MAX(MAX(p_a.y, p_b.y), p_2.y) + (1 << FX_SHAMT)) >> FX_SHAMT;
 
-    printf("triangle bbox:\n");
-    printf("  x: %d %d\n", xmin, xmax);
-    printf("  y: %d %d\n", ymin, ymax);
-
-    float b0 = is_top_left(p1, p2) ? 0 : -1;
-    float b1 = is_top_left(p2, p0) ? 0 : -1;
-    float b2 = is_top_left(p0, p1) ? 0 : -1;
-
-    printf("biases:\n");
-    printf("  %f %f %f\n", b0, b1, b2);
+    float b0 = is_top_left(p_b, p_2) ? 0 : -1;
+    float b1 = is_top_left(p_2, p_a) ? 0 : -1;
+    float b2 = is_top_left(p_a, p_b) ? 0 : -1;
 
     vec3 rand_color = {
         (float)rand() / RAND_MAX,
@@ -619,20 +626,22 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
 
     for (int y = ymin; y <= ymax; y++) {
       for (int x = xmin; x <= xmax; x++) {
-        vec2 p = {x + 0.5, y + 0.5};
-        float w0 = signed_area(p0, p1, p) + b0;
-        float w1 = signed_area(p1, p2, p) + b1;
-        float w2 = signed_area(p2, p0, p) + b2;
+        fxvec2 p = {(x << FX_SHAMT) + FX_HALF, (y << FX_SHAMT) + FX_HALF};
+
+        float w0 = fx_signed_area(p_a, p_b, p) + b0;
+        float w1 = fx_signed_area(p_b, p_2, p) + b1;
+        float w2 = fx_signed_area(p_2, p_a, p) + b2;
 
         if (w0 >= 0 && w1 >= 0 && w2 >= 0) {
-          // set_pixel(color_buffer, x + y * width, rand_color.x, rand_color.y,
-          //           rand_color.z, 1);
-          set_pixel(color_buffer, x + y * width, w0 / area, w1 / area,
-                    w2 / area, 1);
+          set_pixel(color_buffer, x + y * width, rand_color.x, rand_color.y,
+                    rand_color.z, 1);
+          // set_pixel(color_buffer, x + y * width, w0 / area, w1 / area,
+          //           w2 / area, 1);
           // set_pixel(color_buffer, x + y * width, 1, 0, 0, 1);
         }
       }
     }
+    printf("\n");
   }
   printf("\n");
 }

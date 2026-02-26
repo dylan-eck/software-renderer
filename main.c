@@ -305,24 +305,41 @@ mat4 mat4_scale(float factor) {
   };
 }
 
+// viewMatrix = glm::mat4{1.f};
+
+// viewMatrix[3][0] = -glm::dot(u, position);
+// viewMatrix[3][1] = -glm::dot(v, position);
+// viewMatrix[3][2] = -glm::dot(w, position);
+
 mat4 mat4_look_at(vec3 eye, vec3 target, vec3 up) {
   vec3 f = vec3_norm(vec3_sub(target, eye));
-  vec3 s = vec3_norm(vec3_cross(up, f));
+  vec3 s = vec3_norm(vec3_cross(f, up));
   vec3 u = vec3_cross(f, s);
 
   mat4 m;
-  m.col0 = (vec4){s.x, s.y, s.z, 0};
-  m.col1 = (vec4){u.x, u.y, u.z, 0};
-  m.col2 = (vec4){-f.x, -f.y, -f.z, 0};
-  m.col3 = (vec4){-vec3_dot(s, eye), -vec3_dot(u, eye), vec3_dot(f, eye), 1};
+  m.col0 = (vec4){s.x, u.x, f.x, 0.0f};
+  m.col1 = (vec4){s.y, u.y, f.y, 0.0f};
+  m.col2 = (vec4){s.z, u.z, f.z, 0.0f};
+  m.col3 =
+      (vec4){-vec3_dot(s, eye), -vec3_dot(u, eye), -vec3_dot(f, eye), 1.0f};
+
   return m;
+}
+
+mat4 mat4_ortho(float l, float r, float b, float t, float n, float f) {
+  return (mat4){
+      {2 / (r - l), 0, 0, 0},
+      {0, 2 / (t - b), 0, 0},
+      {0, 0, -1 / (f - n), 0},
+      {-(r + l) / (r - l), -(t + b) / (t - b), -n / (f - n), 1},
+  };
 }
 
 mat4 mat4_perspective(float aspect, float fov, float near, float far) {
   return (mat4){
       {1 / (aspect * tanf(fov / 2)), 0, 0, 0},
-      {0, -1 / tanf(fov / 2), 0, 0},
-      {0, 0, far / (near - far), -1},
+      {0, 1 / tanf(fov / 2), 0, 0},
+      {0, 0, far / (far - near), 1},
       {0, 0, -far * near / (far - near), 0},
   };
 }
@@ -545,6 +562,19 @@ float fx_to_float(int32_t n) {
   return (n >> FX_SHAMT) + (float)(n & FX_MASK) / (1 << FX_SHAMT);
 }
 
+float nnz(float n) { return n == 0.0 ? 0.0 : n; }
+
+void mat4_print(mat4 m) {
+  printf("% 5.3f % 5.3f % 5.3f % 5.3f\n", nnz(m.col0.x), nnz(m.col1.x),
+         nnz(m.col2.x), nnz(m.col3.x));
+  printf("% 5.3f % 5.3f % 5.3f % 5.3f\n", nnz(m.col0.y), nnz(m.col1.y),
+         nnz(m.col2.y), nnz(m.col3.y));
+  printf("% 5.3f % 5.3f % 5.3f % 5.3f\n", nnz(m.col0.z), nnz(m.col1.z),
+         nnz(m.col2.z), nnz(m.col3.z));
+  printf("% 5.3f % 5.3f % 5.3f % 5.3f\n", nnz(m.col0.w), nnz(m.col1.w),
+         nnz(m.col2.w), nnz(m.col3.w));
+}
+
 void render(const uint32_t vertex_count, const Vertex *vertices,
             uint32_t *color_buffer, float *depth_buffer, const uint32_t width,
             const uint32_t height) {
@@ -555,19 +585,27 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
     depth_buffer[i] = 1.0f;
   }
 
-  // mat4 model_mat = mat4_scale(1.0f);
-  mat4 model_mat = rotate_z(0.2f);
+  mat4 model_mat = mat4_scale(1.0f);
+  // mat4 model_mat = rotate_z(0.0f);
 
   mat4 view_mat =
-      mat4_look_at((vec3){0, 0, 0.6}, (vec3){0, 0, 0}, (vec3){0, -1, 0});
+      mat4_look_at((vec3){8, -4, 8}, (vec3){0, 0, 0}, (vec3){0, -1, 0});
 
   mat4 projection_mat =
-      mat4_perspective((float)width / height, 3.1415f / 4, 0.1f, 500.0f);
+      mat4_perspective((float)width / height, 3.1415f / 4, 0.1f, 100.0f);
 
   mat4 transform = mat4_mult(mat4_mult(projection_mat, view_mat), model_mat);
 
+  // transform = mat4_ortho(-4, 4, 4, -4, -4, 4);
+
   vec3 sun_direction = {.x = 0, .y = 1, .z = 0};
   sun_direction = vec3_norm(sun_direction);
+
+  printf("projection matrix:\n");
+  mat4_print(projection_mat);
+
+  printf("\nview matrix:\n");
+  mat4_print(view_mat);
 
   for (size_t i = 0; i < vertex_count; i += 3) {
     // if ((i * 3) % 10000 == 0) {
@@ -584,9 +622,6 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
       vec3 pos = vertices[i + j].position;
 
       vec4 clip_pos = mat4_vec4_mult(transform, (vec4){pos.x, pos.y, pos.z, 1});
-
-      // printf("% 5.3f % 5.3f % 5.3f % 5.3f\n", clip_pos.x, clip_pos.y,
-      //        clip_pos.z, clip_pos.w);
 
       if (clip_pos.x < -clip_pos.w || clip_pos.x > clip_pos.w ||
           clip_pos.y < -clip_pos.w || clip_pos.y > clip_pos.w ||
@@ -606,20 +641,25 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
 
     fxvec2 p_a = fxvec2_create(scr_pos[0].x * width, scr_pos[0].y * height);
     fxvec2 p_b = fxvec2_create(scr_pos[1].x * width, scr_pos[1].y * height);
-    fxvec2 p_2 = fxvec2_create(scr_pos[2].x * width, scr_pos[2].y * height);
+    fxvec2 p_c = fxvec2_create(scr_pos[2].x * width, scr_pos[2].y * height);
 
-    int32_t area = fx_signed_area(p_a, p_b, p_2);
+    int32_t area = fx_signed_area(p_a, p_b, p_c);
+
+    // printf("\n%d %d\n", (p_a.x >> FX_SHAMT), (p_a.y >> FX_SHAMT));
+    // printf("%d %d\n", (p_b.x >> FX_SHAMT), (p_b.y >> FX_SHAMT));
+    // printf("%d %d\n", (p_c.x >> FX_SHAMT), (p_c.y >> FX_SHAMT));
+    printf("area: %d\n", (area >> FX_SHAMT));
 
     if (area <= 0) continue;
 
-    int xmin = MIN(MIN(p_a.x, p_b.x), p_2.x) >> FX_SHAMT;
-    int ymin = MIN(MIN(p_a.y, p_b.y), p_2.y) >> FX_SHAMT;
-    int xmax = (MAX(MAX(p_a.x, p_b.x), p_2.x) + (1 << FX_SHAMT)) >> FX_SHAMT;
-    int ymax = (MAX(MAX(p_a.y, p_b.y), p_2.y) + (1 << FX_SHAMT)) >> FX_SHAMT;
+    int xmin = MIN(MIN(p_a.x, p_b.x), p_c.x) >> FX_SHAMT;
+    int ymin = MIN(MIN(p_a.y, p_b.y), p_c.y) >> FX_SHAMT;
+    int xmax = (MAX(MAX(p_a.x, p_b.x), p_c.x) + (1 << FX_SHAMT)) >> FX_SHAMT;
+    int ymax = (MAX(MAX(p_a.y, p_b.y), p_c.y) + (1 << FX_SHAMT)) >> FX_SHAMT;
 
-    float b0 = is_top_left(p_b, p_2) ? 0 : -1;
-    float b1 = is_top_left(p_2, p_a) ? 0 : -1;
-    float b2 = is_top_left(p_a, p_b) ? 0 : -1;
+    int b0 = is_top_left(p_b, p_c) ? 0 : -1;
+    int b1 = is_top_left(p_c, p_a) ? 0 : -1;
+    int b2 = is_top_left(p_a, p_b) ? 0 : -1;
 
     vec3 rand_color = {(float)rand() / RAND_MAX, (float)rand() / RAND_MAX,
                        (float)rand() / RAND_MAX};
@@ -629,8 +669,8 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
         fxvec2 p = {(x << FX_SHAMT) + FX_HALF, (y << FX_SHAMT) + FX_HALF};
 
         int32_t w0 = fx_signed_area(p_a, p_b, p) + b0;
-        int32_t w1 = fx_signed_area(p_b, p_2, p) + b1;
-        int32_t w2 = fx_signed_area(p_2, p_a, p) + b2;
+        int32_t w1 = fx_signed_area(p_b, p_c, p) + b1;
+        int32_t w2 = fx_signed_area(p_c, p_a, p) + b2;
 
         if (w0 >= 0 && w1 >= 0 && w2 >= 0) {
           w0 = (int64_t)(w0 << FX_SHAMT) / area;
@@ -641,9 +681,17 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
           float w1n = fx_to_float(w1);
           float w2n = fx_to_float(w2);
 
-          // set_pixel(color_buffer, x + y * width, rand_color.x, rand_color.y,
-          //           rand_color.z, 1);
-          set_pixel(color_buffer, x + y * width, w0n, w1n, w2n, 1);
+          float depth = depths[0] * w0n + depths[1] * w1n + depths[2] * w2n;
+          // printf("%f\n", depth);
+
+          int idx = x + y * width;
+
+          if (depth >= depth_buffer[idx]) continue;
+          depth_buffer[idx] = depth;
+
+          set_pixel(color_buffer, x + y * width, rand_color.x, rand_color.y,
+                    rand_color.z, 1);
+          // set_pixel(color_buffer, idx, w0n, w1n, w2n, 1);
           // set_pixel(color_buffer, x + y * width, 1, 0, 0, 1);
         }
       }

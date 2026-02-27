@@ -28,7 +28,7 @@
 #define MIN(a, b) (((a) < (b)) ? (a) : (b))
 #define MAX(a, b) (((a) > (b)) ? (a) : (b))
 
-#define FX_SHAMT 4
+#define FX_SHAMT 8
 #define FX_MULT (1 << FX_SHAMT)
 #define FX_HALF (FX_MULT >> 1)
 #define FX_MASK ((1 << FX_SHAMT) - 1)
@@ -65,8 +65,8 @@ enum { TEAPOT_VERTEX_COUNT = 255, TEAPOT_INDEX_COUNT = 351 };
 extern const float TEAPOT_VERTICES[];
 extern const uint8_t TEAPOT_INDICES[];
 
-static const uint32_t WIDTH = 800;
-static const uint32_t HEIGHT = 800;
+static const uint32_t WIDTH = 1080;
+static const uint32_t HEIGHT = 1080;
 
 static const bool WIREFRAME_ENABLED = false;
 
@@ -538,7 +538,7 @@ float signed_area(vec2 a, vec2 b, vec2 c) {
 
 fxvec2 fxvec2_sub(fxvec2 a, fxvec2 b) { return (fxvec2){a.x - b.x, a.y - b.y}; }
 int32_t fxvec2_cross(fxvec2 a, fxvec2 b) {
-  return (a.x * b.y - b.x * a.y) >> FX_SHAMT;
+  return (int32_t)(((int64_t)a.x * b.y - (int64_t)b.x * a.y) >> FX_SHAMT);
 }
 
 int32_t fx_signed_area(fxvec2 a, fxvec2 b, fxvec2 c) {
@@ -586,26 +586,17 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
   }
 
   mat4 model_mat = mat4_scale(1.0f);
-  // mat4 model_mat = rotate_z(0.0f);
 
   mat4 view_mat =
-      mat4_look_at((vec3){8, -4, 8}, (vec3){0, 0, 0}, (vec3){0, -1, 0});
+      mat4_look_at((vec3){0, 0, 80}, (vec3){0, 0, 0}, (vec3){0, -1, 0});
 
   mat4 projection_mat =
-      mat4_perspective((float)width / height, 3.1415f / 4, 0.1f, 100.0f);
+      mat4_perspective((float)width / height, 3.1415f / 4, 0.1f, 200.0f);
 
   mat4 transform = mat4_mult(mat4_mult(projection_mat, view_mat), model_mat);
 
-  // transform = mat4_ortho(-4, 4, 4, -4, -4, 4);
-
   vec3 sun_direction = {.x = 0, .y = 1, .z = 0};
   sun_direction = vec3_norm(sun_direction);
-
-  printf("projection matrix:\n");
-  mat4_print(projection_mat);
-
-  printf("\nview matrix:\n");
-  mat4_print(view_mat);
 
   for (size_t i = 0; i < vertex_count; i += 3) {
     // if ((i * 3) % 10000 == 0) {
@@ -639,18 +630,23 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
     // TODO: clip triangles that are partially inside the viewing volume
     if (shouldClip == 1) continue;
 
+    vec2 f0 = {scr_pos[0].x * width, scr_pos[0].y * height};
+    vec2 f1 = {scr_pos[1].x * width, scr_pos[1].y * height};
+    vec2 f2 = {scr_pos[2].x * width, scr_pos[2].y * height};
+
+    float fa = signed_area(f0, f1, f2);
+    if (fabs(fa) < 1e-6) continue;
+
+    float min_depth = fminf(fminf(depths[0], depths[1]), depths[2]);
+    float max_depth = fmaxf(fmaxf(depths[0], depths[1]), depths[2]);
+
     fxvec2 p_a = fxvec2_create(scr_pos[0].x * width, scr_pos[0].y * height);
     fxvec2 p_b = fxvec2_create(scr_pos[1].x * width, scr_pos[1].y * height);
     fxvec2 p_c = fxvec2_create(scr_pos[2].x * width, scr_pos[2].y * height);
 
     int32_t area = fx_signed_area(p_a, p_b, p_c);
-
-    // printf("\n%d %d\n", (p_a.x >> FX_SHAMT), (p_a.y >> FX_SHAMT));
-    // printf("%d %d\n", (p_b.x >> FX_SHAMT), (p_b.y >> FX_SHAMT));
-    // printf("%d %d\n", (p_c.x >> FX_SHAMT), (p_c.y >> FX_SHAMT));
-    printf("area: %d\n", (area >> FX_SHAMT));
-
-    if (area <= 0) continue;
+    // if (area < (1 << (FX_SHAMT))) continue;
+    // printf("aread: %d\n", area >> FX_SHAMT);
 
     int xmin = MIN(MIN(p_a.x, p_b.x), p_c.x) >> FX_SHAMT;
     int ymin = MIN(MIN(p_a.y, p_b.y), p_c.y) >> FX_SHAMT;
@@ -667,6 +663,7 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
     for (int y = ymin; y <= ymax; y++) {
       for (int x = xmin; x <= xmax; x++) {
         fxvec2 p = {(x << FX_SHAMT) + FX_HALF, (y << FX_SHAMT) + FX_HALF};
+        vec2 pf = {(float)x + 0.5, (float)y + 0.5};
 
         int32_t w0 = fx_signed_area(p_a, p_b, p) + b0;
         int32_t w1 = fx_signed_area(p_b, p_c, p) + b1;
@@ -680,19 +677,55 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
           float w0n = fx_to_float(w0);
           float w1n = fx_to_float(w1);
           float w2n = fx_to_float(w2);
-
-          float depth = depths[0] * w0n + depths[1] * w1n + depths[2] * w2n;
-          // printf("%f\n", depth);
+          float wsum = w0n + w1n + w2n;
 
           int idx = x + y * width;
+
+          float depth =
+              (depths[0] * w1n + depths[1] * w2n + depths[2] * w0n) / wsum;
+
+          // if ((xmax - xmin) <= 2 && (ymax - ymin) <= 2) {
+          //   set_pixel(color_buffer, idx, 1.0f, 0.0f, 1.0f, 1); // bright
+          //   magenta depth_buffer[idx] = depth; continue;
+          // }
+
+          depth = fmaxf(min_depth, fminf(max_depth, depth));
+          depth = fminf(fmaxf(depth, 0.0f), 1.0f);
 
           if (depth >= depth_buffer[idx]) continue;
           depth_buffer[idx] = depth;
 
-          set_pixel(color_buffer, x + y * width, rand_color.x, rand_color.y,
-                    rand_color.z, 1);
+          if (depth < min_depth || depth > max_depth) {
+            printf("\n!!! OUT OF RANGE DEPTH VALUE !!!\n");
+            printf("             depth: %2.10f\n", depth);
+            printf("       depth range: %2.10f %2.10f\n", min_depth, max_depth);
+            printf("normalized weights: %2.10f %2.10f %2.10f\n", w0n, w1n, w2n);
+            printf("        weight sum: %2.10f\n", wsum);
+          }
+
+          vec3 n0 = vertices[i + 0].normal;
+          vec3 n1 = vertices[i + 1].normal;
+          vec3 n2 = vertices[i + 2].normal;
+
+          float nx = (n0.x * w1n + n1.x * w2n + n2.x * w0n) / wsum;
+          float ny = (n0.y * w1n + n1.y * w2n + n2.y * w0n) / wsum;
+          float nz = (n0.z * w1n + n1.z * w2n + n2.z * w0n) / wsum;
+
+          // Normalize so direction is correct and brightness is consistent
+          float len = sqrtf(nx * nx + ny * ny + nz * nz);
+          if (len > 1e-6f) {
+            nx /= len;
+            ny /= len;
+            nz /= len;
+          }
+
+          // Map [-1,1] → [0,1] for nice RGB visualization
+          set_pixel(color_buffer, idx, nx, ny, nz, 1);
+          // set_pixel(color_buffer, idx, rand_color.x, rand_color.y,
+          // rand_color.z,
+          //           1);
           // set_pixel(color_buffer, idx, w0n, w1n, w2n, 1);
-          // set_pixel(color_buffer, x + y * width, 1, 0, 0, 1);
+          // set_pixel(color_buffer, idx, 1, 0, 0, 1);
         }
       }
     }

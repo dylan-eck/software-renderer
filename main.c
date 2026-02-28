@@ -28,7 +28,7 @@
 #define MIN(a, b) (((a) < (b)) ? (a) : (b))
 #define MAX(a, b) (((a) > (b)) ? (a) : (b))
 
-#define FX_SHAMT 8
+#define FX_SHAMT 16
 #define FX_MULT (1 << FX_SHAMT)
 #define FX_HALF (FX_MULT >> 1)
 #define FX_MASK ((1 << FX_SHAMT) - 1)
@@ -172,15 +172,15 @@ int main(int argc, char **argv) {
   }
 
   // center model at origin
-  vec3 avg_position = {0};
-  for (size_t i = 0; i < vertex_count; i++) {
-    avg_position = vec3_add(avg_position, vertices[i].position);
-  }
-  avg_position = vec3_div(avg_position, (float)vertex_count);
+  //   vec3 avg_position = {0};
+  //   for (size_t i = 0; i < vertex_count; i++) {
+  //     avg_position = vec3_add(avg_position, vertices[i].position);
+  //   }
+  //   avg_position = vec3_div(avg_position, (float)vertex_count);
 
-  for (size_t i = 0; i < vertex_count; i++) {
-    vertices[i].position = vec3_sub(vertices[i].position, avg_position);
-  }
+  //   for (size_t i = 0; i < vertex_count; i++) {
+  //     vertices[i].position = vec3_sub(vertices[i].position, avg_position);
+  //   }
 
   uint32_t *color_buffer = calloc(WIDTH * HEIGHT, sizeof(*color_buffer));
   if (color_buffer == NULL) {
@@ -443,11 +443,11 @@ int load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices) {
   size_t last_print = 0;
   while (p < end) {
     size_t index = p - start;
-    if (index - last_print >= 10000) {
-      printf("\r%zu/%ld (%.0f%%)", index, flen, 100.0 * index / flen);
-      fflush(stdout);
-      last_print = index;
-    }
+    // if (index - last_print >= 10000) {
+    //   printf("\r%zu/%ld (%.0f%%)", index, flen, 100.0 * index / flen);
+    //   fflush(stdout);
+    //   last_print = index;
+    // }
 
     if (p != start && *(p - 1) != '\n') {
       p++;
@@ -497,7 +497,7 @@ int load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices) {
 
     p++;
   }
-  printf("\n");
+  // printf("\n");
 
   free(start);
   DARRAY_FREE(vs);
@@ -516,8 +516,13 @@ int load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices) {
 
 void set_pixel(uint32_t *pixels, size_t index, float r, float g, float b,
                float a) {
-  pixels[index] = ((uint8_t)(a * 255) << 24) | ((uint8_t)(r * 255) << 16) |
-                  ((uint8_t)(g * 255) << 8) | (uint8_t)(b * 255);
+
+  uint8_t rn = fminf(fmaxf(r, 0.0f), 1.0f) * 255;
+  uint8_t gn = fminf(fmaxf(g, 0.0f), 1.0f) * 255;
+  uint8_t bn = fminf(fmaxf(b, 0.0f), 1.0f) * 255;
+  uint8_t an = fminf(fmaxf(a, 0.0f), 1.0f) * 255;
+
+  pixels[index] = (an << 24) | (rn << 16) | (gn << 8) | bn;
 }
 
 int ivec2_cross(ivec2 a, ivec2 b) { return a.x * b.y - b.x * a.y; }
@@ -548,8 +553,8 @@ int32_t fx_signed_area(fxvec2 a, fxvec2 b, fxvec2 c) {
 bool is_top_left(fxvec2 p0, fxvec2 p1) {
   fxvec2 delta = fxvec2_sub(p1, p0);
 
-  bool is_top = delta.y == 0 && delta.x < 0;
-  bool is_left = delta.y > 0;
+  bool is_top = (delta.y == 0) && (delta.x > 0);
+  bool is_left = delta.y < 0;
 
   return is_top || is_left;
 }
@@ -580,8 +585,8 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
             const uint32_t height) {
 
   for (size_t i = 0; i < width * height; i++) {
-    // set_pixel(color_buffer, i, 1, 0, 1, 1);
-    set_pixel(color_buffer, i, 0, 0, 0, 1);
+    set_pixel(color_buffer, i, 1, 0, 1, 1);
+    // set_pixel(color_buffer, i, 0, 0, 0, 1);
     depth_buffer[i] = 1.0f;
   }
 
@@ -591,7 +596,7 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
       mat4_look_at((vec3){0, 0, 80}, (vec3){0, 0, 0}, (vec3){0, -1, 0});
 
   mat4 projection_mat =
-      mat4_perspective((float)width / height, 3.1415f / 4, 0.1f, 200.0f);
+      mat4_perspective((float)width / height, 3.1415f / 4, 0.1f, 400.0f);
 
   mat4 transform = mat4_mult(mat4_mult(projection_mat, view_mat), model_mat);
 
@@ -627,6 +632,11 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
       depths[j] = clip_pos.z / clip_pos.w;
     }
 
+    // printf("\nscreen positions:\n");
+    // printf("p_a (float): %2.16f %2.16f\n", scr_pos[0].x, scr_pos[0].y);
+    // printf("p_b (float): %2.16f %2.16f\n", scr_pos[1].x, scr_pos[1].y);
+    // printf("p_c (float): %2.16f %2.16f\n", scr_pos[2].x, scr_pos[2].y);
+
     // TODO: clip triangles that are partially inside the viewing volume
     if (shouldClip == 1) continue;
 
@@ -653,9 +663,9 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
     int xmax = (MAX(MAX(p_a.x, p_b.x), p_c.x) + (1 << FX_SHAMT)) >> FX_SHAMT;
     int ymax = (MAX(MAX(p_a.y, p_b.y), p_c.y) + (1 << FX_SHAMT)) >> FX_SHAMT;
 
-    int b0 = is_top_left(p_b, p_c) ? 0 : -1;
-    int b1 = is_top_left(p_c, p_a) ? 0 : -1;
-    int b2 = is_top_left(p_a, p_b) ? 0 : -1;
+    int b0 = is_top_left(p_a, p_b) ? 0 : -1;
+    int b1 = is_top_left(p_b, p_c) ? 0 : -1;
+    int b2 = is_top_left(p_c, p_a) ? 0 : -1;
 
     vec3 rand_color = {(float)rand() / RAND_MAX, (float)rand() / RAND_MAX,
                        (float)rand() / RAND_MAX};
@@ -670,10 +680,6 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
         int32_t w2 = fx_signed_area(p_c, p_a, p) + b2;
 
         if (w0 >= 0 && w1 >= 0 && w2 >= 0) {
-          w0 = (int64_t)(w0 << FX_SHAMT) / area;
-          w1 = (int64_t)(w1 << FX_SHAMT) / area;
-          w2 = (int64_t)(w2 << FX_SHAMT) / area;
-
           float w0n = fx_to_float(w0);
           float w1n = fx_to_float(w1);
           float w2n = fx_to_float(w2);
@@ -684,24 +690,11 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
           float depth =
               (depths[0] * w1n + depths[1] * w2n + depths[2] * w0n) / wsum;
 
-          // if ((xmax - xmin) <= 2 && (ymax - ymin) <= 2) {
-          //   set_pixel(color_buffer, idx, 1.0f, 0.0f, 1.0f, 1); // bright
-          //   magenta depth_buffer[idx] = depth; continue;
-          // }
-
           depth = fmaxf(min_depth, fminf(max_depth, depth));
           depth = fminf(fmaxf(depth, 0.0f), 1.0f);
 
           if (depth >= depth_buffer[idx]) continue;
           depth_buffer[idx] = depth;
-
-          if (depth < min_depth || depth > max_depth) {
-            printf("\n!!! OUT OF RANGE DEPTH VALUE !!!\n");
-            printf("             depth: %2.10f\n", depth);
-            printf("       depth range: %2.10f %2.10f\n", min_depth, max_depth);
-            printf("normalized weights: %2.10f %2.10f %2.10f\n", w0n, w1n, w2n);
-            printf("        weight sum: %2.10f\n", wsum);
-          }
 
           vec3 n0 = vertices[i + 0].normal;
           vec3 n1 = vertices[i + 1].normal;
@@ -711,18 +704,12 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
           float ny = (n0.y * w1n + n1.y * w2n + n2.y * w0n) / wsum;
           float nz = (n0.z * w1n + n1.z * w2n + n2.z * w0n) / wsum;
 
-          // Normalize so direction is correct and brightness is consistent
-          float len = sqrtf(nx * nx + ny * ny + nz * nz);
-          if (len > 1e-6f) {
-            nx /= len;
-            ny /= len;
-            nz /= len;
-          }
-
-          // Map [-1,1] → [0,1] for nice RGB visualization
           set_pixel(color_buffer, idx, nx, ny, nz, 1);
           // set_pixel(color_buffer, idx, rand_color.x, rand_color.y,
           // rand_color.z,
+          //           1);
+          // set_pixel(color_buffer, idx, rand_color.x, rand_color.x,
+          // rand_color.x,
           //           1);
           // set_pixel(color_buffer, idx, w0n, w1n, w2n, 1);
           // set_pixel(color_buffer, idx, 1, 0, 0, 1);
@@ -730,7 +717,7 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
       }
     }
   }
-  printf("\n");
+  // printf("\n");
 }
 
 void write_uint32_t_le(uint8_t *buffer, uint32_t data) {

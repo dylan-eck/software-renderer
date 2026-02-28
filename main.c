@@ -29,8 +29,8 @@
 #define MAX(a, b) (((a) > (b)) ? (a) : (b))
 
 #define FX_SHAMT 16
-#define FX_MULT (1 << FX_SHAMT)
-#define FX_HALF (FX_MULT >> 1)
+#define FX_ONE (1 << FX_SHAMT)
+#define FX_HALF (FX_ONE >> 1)
 #define FX_MASK ((1 << FX_SHAMT) - 1)
 
 #define DARRAY_DEFINE(type, name)                                              \
@@ -78,10 +78,6 @@ typedef struct {
 } vec2;
 
 typedef struct {
-  int x, y;
-} ivec2;
-
-typedef struct {
   int32_t x;
   int32_t y;
 } fxvec2;
@@ -106,7 +102,6 @@ typedef struct {
 } Vertex;
 
 DARRAY_DEFINE(vec2, vec2_da);
-DARRAY_DEFINE(ivec2, ivec2_da)
 DARRAY_DEFINE(vec3, vec3_da);
 DARRAY_DEFINE(Vertex, Vertex_da);
 
@@ -139,8 +134,7 @@ char *obj_parse_indices(char *p, int32_t *v_idx, int32_t *vt_idx,
                         int32_t *vn_idx);
 int load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices);
 
-void set_pixel(uint32_t *pixels, size_t index, float r, float g, float b,
-               float a);
+void set_pixel(uint32_t *pixels, size_t index, float r, float g, float b);
 void render(const uint32_t vertex_count, const Vertex *vertices,
             uint32_t *color_buffer, float *depth_buffer, const uint32_t width,
             const uint32_t height);
@@ -197,18 +191,7 @@ int main(int argc, char **argv) {
     return EXIT_FAILURE;
   }
 
-  Vertex test_verts[] = {
-      (Vertex){.position = (vec3){0, -2, 0}},
-      (Vertex){.position = (vec3){2, 0, 0}},
-      (Vertex){.position = (vec3){2, -2, 0}},
-
-      (Vertex){.position = (vec3){0, -2, 0}},
-      (Vertex){.position = (vec3){-1, 1, 0}},
-      (Vertex){.position = (vec3){2, 0, 0}},
-  };
-
   render(vertex_count, vertices, color_buffer, depth_buffer, WIDTH, HEIGHT);
-  // render(6, test_verts, color_buffer, depth_buffer, WIDTH, HEIGHT);
 
   if (write_bmp_image(OUPUT_FILE_NAME, WIDTH, HEIGHT, color_buffer) != 0) {
     perror("Error writing output image: ");
@@ -305,12 +288,6 @@ mat4 mat4_scale(float factor) {
   };
 }
 
-// viewMatrix = glm::mat4{1.f};
-
-// viewMatrix[3][0] = -glm::dot(u, position);
-// viewMatrix[3][1] = -glm::dot(v, position);
-// viewMatrix[3][2] = -glm::dot(w, position);
-
 mat4 mat4_look_at(vec3 eye, vec3 target, vec3 up) {
   vec3 f = vec3_norm(vec3_sub(target, eye));
   vec3 s = vec3_norm(vec3_cross(f, up));
@@ -324,15 +301,6 @@ mat4 mat4_look_at(vec3 eye, vec3 target, vec3 up) {
       (vec4){-vec3_dot(s, eye), -vec3_dot(u, eye), -vec3_dot(f, eye), 1.0f};
 
   return m;
-}
-
-mat4 mat4_ortho(float l, float r, float b, float t, float n, float f) {
-  return (mat4){
-      {2 / (r - l), 0, 0, 0},
-      {0, 2 / (t - b), 0, 0},
-      {0, 0, -1 / (f - n), 0},
-      {-(r + l) / (r - l), -(t + b) / (t - b), -n / (f - n), 1},
-  };
 }
 
 mat4 mat4_perspective(float aspect, float fov, float near, float far) {
@@ -514,70 +482,55 @@ int load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices) {
   return 0;
 }
 
-void set_pixel(uint32_t *pixels, size_t index, float r, float g, float b,
-               float a) {
+void set_pixel(uint32_t *pixels, size_t index, float r, float g, float b) {
 
   uint8_t rn = fminf(fmaxf(r, 0.0f), 1.0f) * 255;
   uint8_t gn = fminf(fmaxf(g, 0.0f), 1.0f) * 255;
   uint8_t bn = fminf(fmaxf(b, 0.0f), 1.0f) * 255;
-  uint8_t an = fminf(fmaxf(a, 0.0f), 1.0f) * 255;
 
-  pixels[index] = (an << 24) | (rn << 16) | (gn << 8) | bn;
-}
-
-int ivec2_cross(ivec2 a, ivec2 b) { return a.x * b.y - b.x * a.y; }
-ivec2 ivec2_sub(ivec2 a, ivec2 b) { return (ivec2){a.x - b.x, a.y - b.y}; }
-
-mat4 rotate_z(float theta) {
-  return (mat4){
-      (vec4){cosf(theta), sinf(theta), 0, 0},
-      (vec4){-sinf(theta), cosf(theta), 0, 0},
-      (vec4){0, 0, 1, 0},
-      (vec4){0, 0, 0, 1},
-  };
-}
-
-float signed_area(vec2 a, vec2 b, vec2 c) {
-  return vec2_cross(vec2_sub(c, a), vec2_sub(b, a));
-}
-
-fxvec2 fxvec2_sub(fxvec2 a, fxvec2 b) { return (fxvec2){a.x - b.x, a.y - b.y}; }
-int32_t fxvec2_cross(fxvec2 a, fxvec2 b) {
-  return (int32_t)(((int64_t)a.x * b.y - (int64_t)b.x * a.y) >> FX_SHAMT);
-}
-
-int32_t fx_signed_area(fxvec2 a, fxvec2 b, fxvec2 c) {
-  return fxvec2_cross(fxvec2_sub(c, a), fxvec2_sub(b, a));
-}
-
-bool is_top_left(fxvec2 p0, fxvec2 p1) {
-  fxvec2 delta = fxvec2_sub(p1, p0);
-
-  bool is_top = (delta.y == 0) && (delta.x > 0);
-  bool is_left = delta.y < 0;
-
-  return is_top || is_left;
+  pixels[index] = (0xFF << 24) | (rn << 16) | (gn << 8) | bn;
 }
 
 fxvec2 fxvec2_create(float x, float y) {
-  return (fxvec2){roundf(x * FX_MULT), roundf(y * FX_MULT)};
+  return (fxvec2){roundf(x * FX_ONE), roundf(y * FX_ONE)};
 }
 
 float fx_to_float(int32_t n) {
   return (n >> FX_SHAMT) + (float)(n & FX_MASK) / (1 << FX_SHAMT);
 }
 
-float nnz(float n) { return n == 0.0 ? 0.0 : n; }
+int32_t fx_mult(int32_t a, int32_t b) {
+  return (int32_t)(((int64_t)a * b) >> FX_SHAMT);
+}
 
-void mat4_print(mat4 m) {
-  printf("% 5.3f % 5.3f % 5.3f % 5.3f\n", nnz(m.col0.x), nnz(m.col1.x),
-         nnz(m.col2.x), nnz(m.col3.x));
-  printf("% 5.3f % 5.3f % 5.3f % 5.3f\n", nnz(m.col0.y), nnz(m.col1.y),
-         nnz(m.col2.y), nnz(m.col3.y));
-  printf("% 5.3f % 5.3f % 5.3f % 5.3f\n", nnz(m.col0.z), nnz(m.col1.z),
-         nnz(m.col2.z), nnz(m.col3.z));
-  printf("% 5.3f % 5.3f % 5.3f % 5.3f\n", nnz(m.col0.w), nnz(m.col1.w),
-         nnz(m.col2.w), nnz(m.col3.w));
+// int32_t fx_div(int32_t a, int32_t b) {
+
+// }
+
+fxvec2 fxvec2_sub(fxvec2 a, fxvec2 b) { return (fxvec2){a.x - b.x, a.y - b.y}; }
+int32_t fxvec2_cross(fxvec2 a, fxvec2 b) {
+  return fx_mult(a.x, b.y) - fx_mult(b.x, a.y);
+}
+
+int32_t fx_signed_area(fxvec2 a, fxvec2 b, fxvec2 c) {
+  return fxvec2_cross(fxvec2_sub(c, a), fxvec2_sub(b, a));
+}
+
+int fill_rule_bias(fxvec2 p0, fxvec2 p1) {
+  fxvec2 delta = fxvec2_sub(p1, p0);
+
+  bool is_top = (delta.y == 0) && (delta.x > 0);
+  bool is_left = delta.y < 0;
+
+  return (is_top || is_left) ? 0 : -1;
+}
+
+bool is_in_view(vec4 clip_pos) {
+  bool x_in_view = clip_pos.x >= -clip_pos.w && clip_pos.x <= clip_pos.w;
+  bool y_in_view = clip_pos.y >= -clip_pos.w && clip_pos.y <= clip_pos.w;
+  bool z_in_view = clip_pos.z >= -clip_pos.w && clip_pos.z <= clip_pos.w;
+
+  return x_in_view && y_in_view && z_in_view;
 }
 
 void render(const uint32_t vertex_count, const Vertex *vertices,
@@ -585,15 +538,14 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
             const uint32_t height) {
 
   for (size_t i = 0; i < width * height; i++) {
-    set_pixel(color_buffer, i, 1, 0, 1, 1);
-    // set_pixel(color_buffer, i, 0, 0, 0, 1);
+    set_pixel(color_buffer, i, 0, 0, 0);
     depth_buffer[i] = 1.0f;
   }
 
   mat4 model_mat = mat4_scale(1.0f);
 
   mat4 view_mat =
-      mat4_look_at((vec3){0, 0, 80}, (vec3){0, 0, 0}, (vec3){0, -1, 0});
+      mat4_look_at((vec3){0, 0, 50}, (vec3){0, 0, 0}, (vec3){0, -1, 0});
 
   mat4 projection_mat =
       mat4_perspective((float)width / height, 3.1415f / 4, 0.1f, 400.0f);
@@ -604,80 +556,55 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
   sun_direction = vec3_norm(sun_direction);
 
   for (size_t i = 0; i < vertex_count; i += 3) {
-    // if ((i * 3) % 10000 == 0) {
-    //   printf("\r%lu/%u (%.0f%%)", i, vertex_count,
-    //          100.0f * (float)i / vertex_count);
-    //   fflush(stdout);
-    // }
+    if ((i * 3) % 10000 == 0) {
+      printf("\r%lu/%u (%.0f%%)", i, vertex_count,
+             100.0f * (float)i / vertex_count);
+      fflush(stdout);
+    }
 
-    vec2 scr_pos[3];
-    float depths[3];
-    int shouldClip = 0;
+    vec3 scr_pos[3];
+    int clip_count = 0;
 
     for (int j = 0; j < 3; j++) {
       vec3 pos = vertices[i + j].position;
-
       vec4 clip_pos = mat4_vec4_mult(transform, (vec4){pos.x, pos.y, pos.z, 1});
+      if (!is_in_view(clip_pos)) clip_count++;
 
-      if (clip_pos.x < -clip_pos.w || clip_pos.x > clip_pos.w ||
-          clip_pos.y < -clip_pos.w || clip_pos.y > clip_pos.w ||
-          clip_pos.z < 0 || clip_pos.z > clip_pos.w) {
-
-        shouldClip = 1;
-        break;
-      }
-
-      scr_pos[j] = (vec2){clip_pos.x / clip_pos.w * 0.5 + 0.5,
-                          clip_pos.y / clip_pos.w * 0.5 + 0.5};
-      depths[j] = clip_pos.z / clip_pos.w;
+      scr_pos[j] = (vec3){
+          clip_pos.x / clip_pos.w * 0.5 + 0.5,
+          clip_pos.y / clip_pos.w * 0.5 + 0.5,
+          clip_pos.z / clip_pos.w,
+      };
     }
+    if (clip_count == 3) continue; // triangle completely out of view
 
-    // printf("\nscreen positions:\n");
-    // printf("p_a (float): %2.16f %2.16f\n", scr_pos[0].x, scr_pos[0].y);
-    // printf("p_b (float): %2.16f %2.16f\n", scr_pos[1].x, scr_pos[1].y);
-    // printf("p_c (float): %2.16f %2.16f\n", scr_pos[2].x, scr_pos[2].y);
+    fxvec2 p0 = fxvec2_create(scr_pos[0].x * width, scr_pos[0].y * height);
+    fxvec2 p1 = fxvec2_create(scr_pos[1].x * width, scr_pos[1].y * height);
+    fxvec2 p2 = fxvec2_create(scr_pos[2].x * width, scr_pos[2].y * height);
 
-    // TODO: clip triangles that are partially inside the viewing volume
-    if (shouldClip == 1) continue;
+    if (fx_signed_area(p0, p1, p2) <= 0) continue;
 
-    vec2 f0 = {scr_pos[0].x * width, scr_pos[0].y * height};
-    vec2 f1 = {scr_pos[1].x * width, scr_pos[1].y * height};
-    vec2 f2 = {scr_pos[2].x * width, scr_pos[2].y * height};
+    int xmin = MIN(MIN(p0.x, p1.x), p2.x) >> FX_SHAMT;
+    int ymin = MIN(MIN(p0.y, p1.y), p2.y) >> FX_SHAMT;
+    int xmax = (MAX(MAX(p0.x, p1.x), p2.x) + FX_ONE) >> FX_SHAMT;
+    int ymax = (MAX(MAX(p0.y, p1.y), p2.y) + FX_ONE) >> FX_SHAMT;
 
-    float fa = signed_area(f0, f1, f2);
-    if (fabs(fa) < 1e-6) continue;
+    xmin = MAX(xmin, 0);
+    ymin = MAX(ymin, 0);
+    xmax = MIN(xmax, width - 1);
+    ymax = MIN(ymax, height - 1);
 
-    float min_depth = fminf(fminf(depths[0], depths[1]), depths[2]);
-    float max_depth = fmaxf(fmaxf(depths[0], depths[1]), depths[2]);
-
-    fxvec2 p_a = fxvec2_create(scr_pos[0].x * width, scr_pos[0].y * height);
-    fxvec2 p_b = fxvec2_create(scr_pos[1].x * width, scr_pos[1].y * height);
-    fxvec2 p_c = fxvec2_create(scr_pos[2].x * width, scr_pos[2].y * height);
-
-    int32_t area = fx_signed_area(p_a, p_b, p_c);
-    // if (area < (1 << (FX_SHAMT))) continue;
-    // printf("aread: %d\n", area >> FX_SHAMT);
-
-    int xmin = MIN(MIN(p_a.x, p_b.x), p_c.x) >> FX_SHAMT;
-    int ymin = MIN(MIN(p_a.y, p_b.y), p_c.y) >> FX_SHAMT;
-    int xmax = (MAX(MAX(p_a.x, p_b.x), p_c.x) + (1 << FX_SHAMT)) >> FX_SHAMT;
-    int ymax = (MAX(MAX(p_a.y, p_b.y), p_c.y) + (1 << FX_SHAMT)) >> FX_SHAMT;
-
-    int b0 = is_top_left(p_a, p_b) ? 0 : -1;
-    int b1 = is_top_left(p_b, p_c) ? 0 : -1;
-    int b2 = is_top_left(p_c, p_a) ? 0 : -1;
-
-    vec3 rand_color = {(float)rand() / RAND_MAX, (float)rand() / RAND_MAX,
-                       (float)rand() / RAND_MAX};
+    int b0 = fill_rule_bias(p0, p1);
+    int b1 = fill_rule_bias(p1, p2);
+    int b2 = fill_rule_bias(p2, p0);
 
     for (int y = ymin; y <= ymax; y++) {
       for (int x = xmin; x <= xmax; x++) {
         fxvec2 p = {(x << FX_SHAMT) + FX_HALF, (y << FX_SHAMT) + FX_HALF};
-        vec2 pf = {(float)x + 0.5, (float)y + 0.5};
 
-        int32_t w0 = fx_signed_area(p_a, p_b, p) + b0;
-        int32_t w1 = fx_signed_area(p_b, p_c, p) + b1;
-        int32_t w2 = fx_signed_area(p_c, p_a, p) + b2;
+        int32_t w0 = fx_signed_area(p0, p1, p) + b0;
+        int32_t w1 = fx_signed_area(p1, p2, p) + b1;
+        int32_t w2 = fx_signed_area(p2, p0, p) + b2;
 
         if (w0 >= 0 && w1 >= 0 && w2 >= 0) {
           float w0n = fx_to_float(w0);
@@ -688,10 +615,8 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
           int idx = x + y * width;
 
           float depth =
-              (depths[0] * w1n + depths[1] * w2n + depths[2] * w0n) / wsum;
-
-          depth = fmaxf(min_depth, fminf(max_depth, depth));
-          depth = fminf(fmaxf(depth, 0.0f), 1.0f);
+              (scr_pos[0].z * w1n + scr_pos[1].z * w2n + scr_pos[2].z * w0n) /
+              wsum;
 
           if (depth >= depth_buffer[idx]) continue;
           depth_buffer[idx] = depth;
@@ -704,15 +629,7 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
           float ny = (n0.y * w1n + n1.y * w2n + n2.y * w0n) / wsum;
           float nz = (n0.z * w1n + n1.z * w2n + n2.z * w0n) / wsum;
 
-          set_pixel(color_buffer, idx, nx, ny, nz, 1);
-          // set_pixel(color_buffer, idx, rand_color.x, rand_color.y,
-          // rand_color.z,
-          //           1);
-          // set_pixel(color_buffer, idx, rand_color.x, rand_color.x,
-          // rand_color.x,
-          //           1);
-          // set_pixel(color_buffer, idx, w0n, w1n, w2n, 1);
-          // set_pixel(color_buffer, idx, 1, 0, 0, 1);
+          set_pixel(color_buffer, idx, nx, ny, nz);
         }
       }
     }
@@ -767,8 +684,7 @@ int write_bmp_image(const char *file_name, int32_t width, int32_t height,
   return 0;
 }
 
-/* TEAPOT MODEL DATA ========================================================
- */
+/* TEAPOT MODEL DATA ======================================================== */
 // Original model data from https://graphics.cs.utah.edu/teapot/
 const float TEAPOT_VERTICES[TEAPOT_VERTEX_COUNT] = {
     0.48f, 1.95f, 0.23f, 0.38f, 2.04f, 0.00f, 0.00f, 1.65f, 0.00f, 0.15f, 1.65f,

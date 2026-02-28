@@ -519,6 +519,11 @@ bool is_in_view(vec4 clip_pos) {
   return x_in_view && y_in_view && z_in_view;
 }
 
+float barycentric_lerp(vec3 v, vec3 w) {
+  float w_sum = w.x + w.y + w.z;
+  return (v.x * w.x + v.y * w.y + v.z * w.z) / w_sum;
+}
+
 void render(const uint32_t vertex_count, const Vertex *vertices,
             uint32_t *color_buffer, float *depth_buffer, const uint32_t width,
             const uint32_t height) {
@@ -538,8 +543,7 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
 
   mat4 transform = mat4_mult(mat4_mult(projection_mat, view_mat), model_mat);
 
-  vec3 sun_direction = {.x = 0, .y = 1, .z = 0};
-  sun_direction = vec3_norm(sun_direction);
+  vec3 sun_direction = vec3_norm((vec3){.x = 0, .y = -1, .z = 0});
 
   for (size_t i = 0; i < vertex_count; i += 3) {
     if ((i * 3) % 10000 == 0) {
@@ -549,12 +553,17 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
     }
 
     vec3 scr_pos[3];
+    vec3 normals[3];
     int clip_count = 0;
 
     for (int j = 0; j < 3; j++) {
       vec3 pos = vertices[i + j].position;
       vec4 clip_pos = mat4_vec4_mult(transform, (vec4){pos.x, pos.y, pos.z, 1});
       if (!is_in_view(clip_pos)) clip_count++;
+
+      vec3 n = vertices[i + j].normal;
+      vec4 wn = mat4_vec4_mult(model_mat, (vec4){n.x, n.y, n.z, 0});
+      normals[j] = vec3_norm((vec3){wn.x, wn.y, wn.z});
 
       scr_pos[j] = (vec3){
           clip_pos.x / clip_pos.w * 0.5 + 0.5,
@@ -571,51 +580,54 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
     if (fx_signed_area(p0, p1, p2) <= 0) continue;
 
     int xmin = MIN(MIN(p0.x, p1.x), p2.x) >> FX_SHAMT;
-    int ymin = MIN(MIN(p0.y, p1.y), p2.y) >> FX_SHAMT;
-    int xmax = (MAX(MAX(p0.x, p1.x), p2.x) + FX_ONE) >> FX_SHAMT;
-    int ymax = (MAX(MAX(p0.y, p1.y), p2.y) + FX_ONE) >> FX_SHAMT;
-
     xmin = MAX(xmin, 0);
+
+    int ymin = MIN(MIN(p0.y, p1.y), p2.y) >> FX_SHAMT;
     ymin = MAX(ymin, 0);
+
+    int xmax = (MAX(MAX(p0.x, p1.x), p2.x) + FX_ONE) >> FX_SHAMT;
     xmax = MIN(xmax, width - 1);
+
+    int ymax = (MAX(MAX(p0.y, p1.y), p2.y) + FX_ONE) >> FX_SHAMT;
     ymax = MIN(ymax, height - 1);
 
     int b0 = fill_rule_bias(p0, p1);
     int b1 = fill_rule_bias(p1, p2);
     int b2 = fill_rule_bias(p2, p0);
+
     for (int y = ymin; y <= ymax; y++) {
       for (int x = xmin; x <= xmax; x++) {
         fxvec2 p = {(x << FX_SHAMT) + FX_HALF, (y << FX_SHAMT) + FX_HALF};
 
-        fix32_t w0 = fx_signed_area(p0, p1, p) + b0;
-        fix32_t w1 = fx_signed_area(p1, p2, p) + b1;
-        fix32_t w2 = fx_signed_area(p2, p0, p) + b2;
+        fix32_t a0 = fx_signed_area(p0, p1, p) + b0;
+        fix32_t a1 = fx_signed_area(p1, p2, p) + b1;
+        fix32_t a2 = fx_signed_area(p2, p0, p) + b2;
 
-        if (w0 >= 0 && w1 >= 0 && w2 >= 0) {
-          float w0n = fx_to_float(w0);
-          float w1n = fx_to_float(w1);
-          float w2n = fx_to_float(w2);
-          float wsum = w0n + w1n + w2n;
+        if (a0 < 0 || a1 < 0 || a2 < 0) continue;
 
-          int idx = x + y * width;
+        vec3 weights = {fx_to_float(a0), fx_to_float(a1), fx_to_float(a2)};
 
-          float depth =
-              (scr_pos[0].z * w1n + scr_pos[1].z * w2n + scr_pos[2].z * w0n) /
-              wsum;
+        float depth = barycentric_lerp(
+            (vec3){scr_pos[0].z, scr_pos[1].z, scr_pos[2].z}, weights);
 
-          if (depth >= depth_buffer[idx]) continue;
-          depth_buffer[idx] = depth;
+        int idx = x + y * width;
+        if (depth >= depth_buffer[idx]) continue;
+        depth_buffer[idx] = depth;
 
-          vec3 n0 = vertices[i + 0].normal;
-          vec3 n1 = vertices[i + 1].normal;
-          vec3 n2 = vertices[i + 2].normal;
+        vec3 nx = (vec3){normals[0].x, normals[1].x, normals[2].x};
+        vec3 ny = (vec3){normals[0].y, normals[1].y, normals[2].y};
+        vec3 nz = (vec3){normals[0].z, normals[1].z, normals[2].z};
 
-          float nx = (n0.x * w1n + n1.x * w2n + n2.x * w0n) / wsum;
-          float ny = (n0.y * w1n + n1.y * w2n + n2.y * w0n) / wsum;
-          float nz = (n0.z * w1n + n1.z * w2n + n2.z * w0n) / wsum;
+        vec3 normal = {
+            barycentric_lerp(nx, weights),
+            barycentric_lerp(ny, weights),
+            barycentric_lerp(nz, weights),
+        };
 
-          set_pixel(color_buffer, idx, nx, ny, nz);
-        }
+        float ambient = 0.1;
+        float light = MAX(vec3_dot(normal, sun_direction), 0) + ambient;
+
+        set_pixel(color_buffer, idx, light, light, light);
       }
     }
   }

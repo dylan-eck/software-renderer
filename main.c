@@ -368,6 +368,20 @@ char *obj_parse_indices(char *p, int32_t *v_idx, int32_t *vt_idx,
   return p;
 }
 
+void print_pbar(float progress, int length, const char *prefix) {
+  if (progress >= 1) {
+    printf("\r%sdone%*s", prefix, length, "");
+    return;
+  }
+
+  printf("\r%s[", prefix);
+  for (int i = 0; i < length; i++) {
+    putchar(i < (int)(progress * length) ? '#' : ' ');
+  }
+  printf("]");
+  fflush(stdout);
+}
+
 int load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices) {
   *vertices = NULL;
   *vertex_count = 0;
@@ -396,12 +410,10 @@ int load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices) {
   char *end = start + flen;
   size_t last_print = 0;
   while (p < end) {
-    size_t index = p - start;
-    // if (index - last_print >= 10000) {
-    //   printf("\r%zu/%ld (%.0f%%)", index, flen, 100.0 * index / flen);
-    //   fflush(stdout);
-    //   last_print = index;
-    // }
+    size_t i = p - start;
+    if ((i * 3) % 10000 == 0) {
+      print_pbar((float)i / flen, 30, "loading model: ");
+    }
 
     if (p != start && *(p - 1) != '\n') {
       p++;
@@ -451,7 +463,8 @@ int load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices) {
 
     p++;
   }
-  // printf("\n");
+  print_pbar(1, 30, "loading model: ");
+  printf("\n");
 
   free(start);
   DARRAY_FREE(vs);
@@ -547,9 +560,7 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
 
   for (size_t i = 0; i < vertex_count; i += 3) {
     if ((i * 3) % 10000 == 0) {
-      printf("\r%lu/%u (%.0f%%)", i, vertex_count,
-             100.0f * (float)i / vertex_count);
-      fflush(stdout);
+      print_pbar((float)i / vertex_count, 30, "    rendering: ");
     }
 
     vec3 scr_pos[3];
@@ -631,7 +642,8 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
       }
     }
   }
-  // printf("\n");
+  print_pbar(1, 30, "    rendering: ");
+  printf("\n");
 }
 
 void write_uint32_t_le(uint8_t *buffer, uint32_t data) {

@@ -73,6 +73,8 @@ static const bool WIREFRAME_ENABLED = false;
 static const char *OUPUT_FILE_NAME = "out.bmp";
 
 /* TYPE DEFINITIONS ========================================================= */
+typedef int32_t fix32_t;
+
 typedef struct {
   float x, y;
 } vec2;
@@ -107,19 +109,15 @@ DARRAY_DEFINE(Vertex, Vertex_da);
 
 /* FUNCTION DECLARATIONS ==================================================== */
 vec3 vec3_add(vec3 v1, vec3 v2);
-vec2 vec2_sub(vec2 v1, vec2 v2);
 vec3 vec3_sub(vec3 v1, vec3 v2);
 vec3 vec3_div(vec3 v, float s);
-vec4 vec4_div(vec4 v, float d);
 
 float vec3_dot(vec3 v1, vec3 v2);
 float vec4_dot(vec4 v1, vec4 v2);
-float vec2_cross(vec2 v1, vec2 v2);
 vec3 vec3_cross(vec3 v1, vec3 v2);
+
 float vec3_mag(vec3 v);
-float vec4_mag(vec4 v);
 vec3 vec3_norm(vec3 v);
-vec4 vec4_norm(vec4 v);
 
 mat4 mat4_mult(mat4 m1, mat4 m2);
 vec4 mat4_vec4_mult(mat4 m, vec4 v);
@@ -128,7 +126,7 @@ mat4 mat4_scale(float factor);
 mat4 mat4_look_at(vec3 eye, vec3 target, vec3 up);
 mat4 mat4_perspective(float aspect, float fov, float near, float far);
 
-void calculate_normals(size_t vertex_count, Vertex *vertices);
+void calculate_normals_flat(size_t vertex_count, Vertex *vertices);
 int load_teapot(size_t *vertex_count, Vertex **vertices);
 char *obj_parse_indices(char *p, int32_t *v_idx, int32_t *vt_idx,
                         int32_t *vn_idx);
@@ -166,15 +164,15 @@ int main(int argc, char **argv) {
   }
 
   // center model at origin
-  //   vec3 avg_position = {0};
-  //   for (size_t i = 0; i < vertex_count; i++) {
-  //     avg_position = vec3_add(avg_position, vertices[i].position);
-  //   }
-  //   avg_position = vec3_div(avg_position, (float)vertex_count);
+  vec3 avg_position = {0};
+  for (size_t i = 0; i < vertex_count; i++) {
+    avg_position = vec3_add(avg_position, vertices[i].position);
+  }
+  avg_position = vec3_div(avg_position, (float)vertex_count);
 
-  //   for (size_t i = 0; i < vertex_count; i++) {
-  //     vertices[i].position = vec3_sub(vertices[i].position, avg_position);
-  //   }
+  for (size_t i = 0; i < vertex_count; i++) {
+    vertices[i].position = vec3_sub(vertices[i].position, avg_position);
+  }
 
   uint32_t *color_buffer = calloc(WIDTH * HEIGHT, sizeof(*color_buffer));
   if (color_buffer == NULL) {
@@ -213,17 +211,11 @@ vec3 vec3_add(vec3 v1, vec3 v2) {
   return (vec3){v1.x + v2.x, v1.y + v2.y, v1.z + v2.z};
 }
 
-vec2 vec2_sub(vec2 v1, vec2 v2) { return (vec2){v1.x - v2.x, v1.y - v2.y}; }
-
 vec3 vec3_sub(vec3 v1, vec3 v2) {
   return (vec3){v1.x - v2.x, v1.y - v2.y, v1.z - v2.z};
 }
 
 vec3 vec3_div(vec3 v, float d) { return (vec3){v.x / d, v.y / d, v.z / d}; }
-
-vec4 vec4_div(vec4 v, float d) {
-  return (vec4){v.x / d, v.y / d, v.z / d, v.w / d};
-}
 
 float vec3_dot(vec3 v1, vec3 v2) {
   return v1.x * v2.x + v1.y * v2.y + v1.z * v2.z;
@@ -232,8 +224,6 @@ float vec3_dot(vec3 v1, vec3 v2) {
 float vec4_dot(vec4 v1, vec4 v2) {
   return v1.x * v2.x + v1.y * v2.y + v1.z * v2.z + v1.w * v2.w;
 }
-
-float vec2_cross(vec2 v1, vec2 v2) { return v1.x * v2.y - v1.y * v2.x; }
 
 vec3 vec3_cross(vec3 v1, vec3 v2) {
   return (vec3){
@@ -245,11 +235,7 @@ vec3 vec3_cross(vec3 v1, vec3 v2) {
 
 float vec3_mag(vec3 v) { return sqrtf(vec3_dot(v, v)); }
 
-float vec4_mag(vec4 v) { return sqrtf(vec4_dot(v, v)); }
-
 vec3 vec3_norm(vec3 v) { return vec3_div(v, vec3_mag(v)); }
-
-vec4 vec4_norm(vec4 v) { return vec4_div(v, vec4_mag(v)); }
 
 mat4 mat4_mult(mat4 m1, mat4 m2) {
   vec4 row0 = {m1.col0.x, m1.col1.x, m1.col2.x, m1.col3.x};
@@ -257,16 +243,16 @@ mat4 mat4_mult(mat4 m1, mat4 m2) {
   vec4 row2 = {m1.col0.z, m1.col1.z, m1.col2.z, m1.col3.z};
   vec4 row3 = {m1.col0.w, m1.col1.w, m1.col2.w, m1.col3.w};
 
-  return (mat4){
-      {vec4_dot(row0, m2.col0), vec4_dot(row1, m2.col0),
-       vec4_dot(row2, m2.col0), vec4_dot(row3, m2.col0)},
-      {vec4_dot(row0, m2.col1), vec4_dot(row1, m2.col1),
-       vec4_dot(row2, m2.col1), vec4_dot(row3, m2.col1)},
-      {vec4_dot(row0, m2.col2), vec4_dot(row1, m2.col2),
-       vec4_dot(row2, m2.col2), vec4_dot(row3, m2.col2)},
-      {vec4_dot(row0, m2.col3), vec4_dot(row1, m2.col3),
-       vec4_dot(row2, m2.col3), vec4_dot(row3, m2.col3)},
-  };
+  mat4 m;
+  m.col0 = (vec4){vec4_dot(row0, m2.col0), vec4_dot(row1, m2.col0),
+                  vec4_dot(row2, m2.col0), vec4_dot(row3, m2.col0)};
+  m.col1 = (vec4){vec4_dot(row0, m2.col1), vec4_dot(row1, m2.col1),
+                  vec4_dot(row2, m2.col1), vec4_dot(row3, m2.col1)};
+  m.col2 = (vec4){vec4_dot(row0, m2.col2), vec4_dot(row1, m2.col2),
+                  vec4_dot(row2, m2.col2), vec4_dot(row3, m2.col2)};
+  m.col3 = (vec4){vec4_dot(row0, m2.col3), vec4_dot(row1, m2.col3),
+                  vec4_dot(row2, m2.col3), vec4_dot(row3, m2.col3)};
+  return m;
 }
 
 vec4 mat4_vec4_mult(mat4 m, vec4 v) {
@@ -312,7 +298,7 @@ mat4 mat4_perspective(float aspect, float fov, float near, float far) {
   };
 }
 
-void calculate_normals(size_t vertex_count, Vertex *vertices) {
+void calculate_normals_flat(size_t vertex_count, Vertex *vertices) {
   for (size_t i = 0; i < vertex_count; i += 3) {
 
     vec3 p0 = vertices[i].position;
@@ -357,7 +343,7 @@ int load_teapot(size_t *vertex_count, Vertex **vertices) {
     }
   }
 
-  calculate_normals(2 * TEAPOT_INDEX_COUNT, verts);
+  calculate_normals_flat(2 * TEAPOT_INDEX_COUNT, verts);
 
   *vertex_count = 2 * TEAPOT_INDEX_COUNT;
   *vertices = verts;
@@ -473,7 +459,7 @@ int load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices) {
   DARRAY_FREE(vns);
 
   if (vns.size == 0) {
-    calculate_normals(mesh_verts.size, mesh_verts.items);
+    calculate_normals_flat(mesh_verts.size, mesh_verts.items);
   }
 
   *vertices = mesh_verts.items;
@@ -483,7 +469,6 @@ int load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices) {
 }
 
 void set_pixel(uint32_t *pixels, size_t index, float r, float g, float b) {
-
   uint8_t rn = fminf(fmaxf(r, 0.0f), 1.0f) * 255;
   uint8_t gn = fminf(fmaxf(g, 0.0f), 1.0f) * 255;
   uint8_t bn = fminf(fmaxf(b, 0.0f), 1.0f) * 255;
@@ -495,12 +480,12 @@ fxvec2 fxvec2_create(float x, float y) {
   return (fxvec2){roundf(x * FX_ONE), roundf(y * FX_ONE)};
 }
 
-float fx_to_float(int32_t n) {
+float fx_to_float(fix32_t n) {
   return (n >> FX_SHAMT) + (float)(n & FX_MASK) / (1 << FX_SHAMT);
 }
 
-int32_t fx_mult(int32_t a, int32_t b) {
-  return (int32_t)(((int64_t)a * b) >> FX_SHAMT);
+fix32_t fx_mult(fix32_t a, fix32_t b) {
+  return (fix32_t)(((int64_t)a * b) >> FX_SHAMT);
 }
 
 // int32_t fx_div(int32_t a, int32_t b) {
@@ -508,11 +493,12 @@ int32_t fx_mult(int32_t a, int32_t b) {
 // }
 
 fxvec2 fxvec2_sub(fxvec2 a, fxvec2 b) { return (fxvec2){a.x - b.x, a.y - b.y}; }
-int32_t fxvec2_cross(fxvec2 a, fxvec2 b) {
+
+fix32_t fxvec2_cross(fxvec2 a, fxvec2 b) {
   return fx_mult(a.x, b.y) - fx_mult(b.x, a.y);
 }
 
-int32_t fx_signed_area(fxvec2 a, fxvec2 b, fxvec2 c) {
+fix32_t fx_signed_area(fxvec2 a, fxvec2 b, fxvec2 c) {
   return fxvec2_cross(fxvec2_sub(c, a), fxvec2_sub(b, a));
 }
 
@@ -597,14 +583,13 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
     int b0 = fill_rule_bias(p0, p1);
     int b1 = fill_rule_bias(p1, p2);
     int b2 = fill_rule_bias(p2, p0);
-
     for (int y = ymin; y <= ymax; y++) {
       for (int x = xmin; x <= xmax; x++) {
         fxvec2 p = {(x << FX_SHAMT) + FX_HALF, (y << FX_SHAMT) + FX_HALF};
 
-        int32_t w0 = fx_signed_area(p0, p1, p) + b0;
-        int32_t w1 = fx_signed_area(p1, p2, p) + b1;
-        int32_t w2 = fx_signed_area(p2, p0, p) + b2;
+        fix32_t w0 = fx_signed_area(p0, p1, p) + b0;
+        fix32_t w1 = fx_signed_area(p1, p2, p) + b1;
+        fix32_t w2 = fx_signed_area(p2, p0, p) + b2;
 
         if (w0 >= 0 && w1 >= 0 && w2 >= 0) {
           float w0n = fx_to_float(w0);

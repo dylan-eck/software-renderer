@@ -3,14 +3,12 @@
  *
  * This is a very basic software renderer that can load and render obj files.
  *
- * Things to note:
- * This is a single threaded program, so large images can take a long time to
- * render
+ * How to build and run:
  *
- * Helpful Resources:
- * https://kristoffer-dyrkorn.github.io/triangle-rasterizer/
- * https://stackoverflow.com/questions/10067510/fixed-point-arithmetic-in-c-programming
- * https://stackoverflow.com/questions/24441631/how-exactly-does-opengl-do-perspectively-correct-linear-interpolation
+ * This program uses only C99 features and standard c librarys, so any c
+ * compiler should work.
+ *
+ * clang main.c OR gcc main.c OR cl main.c
  */
 
 #include <errno.h>
@@ -28,10 +26,9 @@
 #define MIN(a, b) (((a) < (b)) ? (a) : (b))
 #define MAX(a, b) (((a) > (b)) ? (a) : (b))
 
-#define FX_SHAMT 16
-#define FX_ONE (1 << FX_SHAMT)
-#define FX_HALF (FX_ONE >> 1)
-#define FX_MASK ((1 << FX_SHAMT) - 1)
+#define FIX_SHIFT 16
+#define FIX_HALF ((1 << FIX_SHIFT) >> 1)
+#define FIX_MASK ((1 << FIX_SHIFT) - 1)
 
 #define DARRAY_DEFINE(type, name)                                              \
   typedef struct {                                                             \
@@ -73,27 +70,16 @@ static const bool WIREFRAME_ENABLED = false;
 static const char *OUPUT_FILE_NAME = "out.bmp";
 
 /* TYPE DEFINITIONS ========================================================= */
+// clang-format off
 typedef int32_t fix32_t;
 
-typedef struct {
-  float x, y;
-} vec2;
+typedef struct { float x, y; } vec2;
+typedef struct { fix32_t x, y; } fix2;
 
-typedef struct {
-  int32_t x;
-  int32_t y;
-} fxvec2;
-
-typedef struct {
-  float x, y, z;
-} vec3;
-typedef struct {
-  float x, y, z, w;
-} vec4;
-typedef struct {
-  vec4 col0, col1, col2, col3;
-} mat4;
-
+typedef struct { float x, y, z; } vec3;
+typedef struct { float x, y, z, w; } vec4;
+typedef struct { vec4 col0, col1, col2, col3; } mat4;
+// clang-format on
 typedef struct {
   vec3 position;
   float p0;
@@ -481,42 +467,39 @@ int load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices) {
   return 0;
 }
 
-void set_pixel(uint32_t *pixels, size_t index, float r, float g, float b) {
+void set_pixel(uint32_t *color_buffer, size_t index, float r, float g,
+               float b) {
   uint8_t rn = fminf(fmaxf(r, 0.0f), 1.0f) * 255;
   uint8_t gn = fminf(fmaxf(g, 0.0f), 1.0f) * 255;
   uint8_t bn = fminf(fmaxf(b, 0.0f), 1.0f) * 255;
 
-  pixels[index] = (0xFF << 24) | (rn << 16) | (gn << 8) | bn;
+  color_buffer[index] = (0xFF << 24) | (rn << 16) | (gn << 8) | bn;
 }
 
-fxvec2 fxvec2_create(float x, float y) {
-  return (fxvec2){roundf(x * FX_ONE), roundf(y * FX_ONE)};
+fix2 fxvec2_create(float x, float y) {
+  return (fix2){roundf(x * (1 << FIX_SHIFT)), roundf(y * (1 << FIX_SHIFT))};
 }
 
 float fx_to_float(fix32_t n) {
-  return (n >> FX_SHAMT) + (float)(n & FX_MASK) / (1 << FX_SHAMT);
+  return (n >> FIX_SHIFT) + (float)(n & FIX_MASK) / (1 << FIX_SHIFT);
 }
 
 fix32_t fx_mult(fix32_t a, fix32_t b) {
-  return (fix32_t)(((int64_t)a * b) >> FX_SHAMT);
+  return (fix32_t)(((int64_t)a * b) >> FIX_SHIFT);
 }
 
-// int32_t fx_div(int32_t a, int32_t b) {
+fix2 fxvec2_sub(fix2 a, fix2 b) { return (fix2){a.x - b.x, a.y - b.y}; }
 
-// }
-
-fxvec2 fxvec2_sub(fxvec2 a, fxvec2 b) { return (fxvec2){a.x - b.x, a.y - b.y}; }
-
-fix32_t fxvec2_cross(fxvec2 a, fxvec2 b) {
+fix32_t fxvec2_cross(fix2 a, fix2 b) {
   return fx_mult(a.x, b.y) - fx_mult(b.x, a.y);
 }
 
-fix32_t fx_signed_area(fxvec2 a, fxvec2 b, fxvec2 c) {
+fix32_t fx_signed_area(fix2 a, fix2 b, fix2 c) {
   return fxvec2_cross(fxvec2_sub(c, a), fxvec2_sub(b, a));
 }
 
-int fill_rule_bias(fxvec2 p0, fxvec2 p1) {
-  fxvec2 delta = fxvec2_sub(p1, p0);
+int fill_rule_bias(fix2 p0, fix2 p1) {
+  fix2 delta = fxvec2_sub(p1, p0);
 
   bool is_top = (delta.y == 0) && (delta.x > 0);
   bool is_left = delta.y < 0;
@@ -584,23 +567,16 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
     }
     if (clip_count == 3) continue; // triangle completely out of view
 
-    fxvec2 p0 = fxvec2_create(scr_pos[0].x * width, scr_pos[0].y * height);
-    fxvec2 p1 = fxvec2_create(scr_pos[1].x * width, scr_pos[1].y * height);
-    fxvec2 p2 = fxvec2_create(scr_pos[2].x * width, scr_pos[2].y * height);
+    fix2 p0 = fxvec2_create(scr_pos[0].x * width, scr_pos[0].y * height);
+    fix2 p1 = fxvec2_create(scr_pos[1].x * width, scr_pos[1].y * height);
+    fix2 p2 = fxvec2_create(scr_pos[2].x * width, scr_pos[2].y * height);
 
     if (fx_signed_area(p0, p1, p2) <= 0) continue;
 
-    int xmin = MIN(MIN(p0.x, p1.x), p2.x) >> FX_SHAMT;
-    xmin = MAX(xmin, 0);
-
-    int ymin = MIN(MIN(p0.y, p1.y), p2.y) >> FX_SHAMT;
-    ymin = MAX(ymin, 0);
-
-    int xmax = (MAX(MAX(p0.x, p1.x), p2.x) + FX_ONE) >> FX_SHAMT;
-    xmax = MIN(xmax, width - 1);
-
-    int ymax = (MAX(MAX(p0.y, p1.y), p2.y) + FX_ONE) >> FX_SHAMT;
-    ymax = MIN(ymax, height - 1);
+    int xmin = MAX(0, MIN(MIN(p0.x, p1.x), p2.x) >> FIX_SHIFT);
+    int ymin = MAX(0, MIN(MIN(p0.y, p1.y), p2.y) >> FIX_SHIFT);
+    int xmax = MIN(width - 1, ((MAX(MAX(p0.x, p1.x), p2.x)) >> FIX_SHIFT) + 1);
+    int ymax = MIN(height - 1, ((MAX(MAX(p0.y, p1.y), p2.y)) >> FIX_SHIFT) + 1);
 
     int b0 = fill_rule_bias(p0, p1);
     int b1 = fill_rule_bias(p1, p2);
@@ -608,7 +584,7 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
 
     for (int y = ymin; y <= ymax; y++) {
       for (int x = xmin; x <= xmax; x++) {
-        fxvec2 p = {(x << FX_SHAMT) + FX_HALF, (y << FX_SHAMT) + FX_HALF};
+        fix2 p = {(x << FIX_SHIFT) + FIX_HALF, (y << FIX_SHIFT) + FIX_HALF};
 
         fix32_t a0 = fx_signed_area(p0, p1, p) + b0;
         fix32_t a1 = fx_signed_area(p1, p2, p) + b1;

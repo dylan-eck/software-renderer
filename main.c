@@ -62,10 +62,9 @@ enum { TEAPOT_VERTEX_COUNT = 255, TEAPOT_INDEX_COUNT = 351 };
 extern const float TEAPOT_VERTICES[];
 extern const uint8_t TEAPOT_INDICES[];
 
-static const uint32_t WIDTH = 1080;
+static const uint32_t WIDTH = 1920;
 static const uint32_t HEIGHT = 1080;
-
-static const bool WIREFRAME_ENABLED = false;
+static const float FOV_Y = 3.1415f / 4;
 
 static const char *OUPUT_FILE_NAME = "out.bmp";
 
@@ -163,8 +162,10 @@ int main(int argc, char **argv) {
     vertices[i].position = vec3_sub(vertices[i].position, avg_position);
   }
 
+  // ensure that model is fully visible
   float max_dist = get_max_dist(vertex_count, vertices) * 1.1f;
-  float camera_dist = fabsf(max_dist / sinf(3.1415f / 4 * 0.5f));
+  float min_fov = (WIDTH >= HEIGHT) ? FOV_Y : (FOV_Y * (float)WIDTH / HEIGHT);
+  float camera_dist = fabsf(max_dist / sinf(min_fov * 0.5f));
 
   mat4 view_matrix = mat4_look_at((vec3){0, 0, camera_dist}, (vec3){0, 0, 0},
                                   (vec3){0, -1, 0});

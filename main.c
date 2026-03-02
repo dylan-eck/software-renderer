@@ -94,9 +94,7 @@ DARRAY_DEFINE(vec3, vec3_da);
 DARRAY_DEFINE(Vertex, Vertex_da);
 
 /* FUNCTION DECLARATIONS ==================================================== */
-vec3 vec3_add(vec3 v1, vec3 v2);
 vec3 vec3_sub(vec3 v1, vec3 v2);
-vec3 vec3_div(vec3 v, float s);
 
 float vec3_dot(vec3 v1, vec3 v2);
 float vec4_dot(vec4 v1, vec4 v2);
@@ -119,8 +117,6 @@ char *obj_parse_indices(char *p, int32_t *v_idx, int32_t *vt_idx,
 int load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices);
 
 float get_max_dist(uint32_t vertex_count, const Vertex *vertices);
-void get_aabb(const uint32_t vertex_count, const Vertex *vertices, vec3 *bbtl,
-              vec3 *bbbr);
 void set_pixel(uint32_t *pixels, size_t index, float r, float g, float b);
 void render(const uint32_t vertex_count, const Vertex *vertices,
             uint32_t *color_buffer, float *depth_buffer, const uint32_t width,
@@ -155,9 +151,13 @@ int main(int argc, char **argv) {
   // center model at origin
   vec3 avg_position = {0};
   for (size_t i = 0; i < vertex_count; i++) {
-    avg_position = vec3_add(avg_position, vertices[i].position);
+    avg_position.x += vertices[i].position.x;
+    avg_position.y += vertices[i].position.y;
+    avg_position.z += vertices[i].position.z;
   }
-  avg_position = vec3_div(avg_position, (float)vertex_count);
+  avg_position.x /= (float)vertex_count;
+  avg_position.y /= (float)vertex_count;
+  avg_position.z /= (float)vertex_count;
 
   for (size_t i = 0; i < vertex_count; i++) {
     vertices[i].position = vec3_sub(vertices[i].position, avg_position);
@@ -165,8 +165,6 @@ int main(int argc, char **argv) {
 
   float max_dist = get_max_dist(vertex_count, vertices) * 1.1f;
   float camera_dist = fabsf(max_dist / sinf(3.1415f / 4 * 0.5f));
-  printf("max dist %f\n", max_dist);
-  printf("camera dist %f\n", camera_dist);
 
   mat4 view_matrix = mat4_look_at((vec3){0, 0, camera_dist}, (vec3){0, 0, 0},
                                   (vec3){0, -1, 0});
@@ -205,15 +203,9 @@ int main(int argc, char **argv) {
 }
 
 /* FUNCTION IMPLEMENTATIONS ================================================= */
-vec3 vec3_add(vec3 v1, vec3 v2) {
-  return (vec3){v1.x + v2.x, v1.y + v2.y, v1.z + v2.z};
-}
-
 vec3 vec3_sub(vec3 v1, vec3 v2) {
   return (vec3){v1.x - v2.x, v1.y - v2.y, v1.z - v2.z};
 }
-
-vec3 vec3_div(vec3 v, float d) { return (vec3){v.x / d, v.y / d, v.z / d}; }
 
 float vec3_dot(vec3 v1, vec3 v2) {
   return v1.x * v2.x + v1.y * v2.y + v1.z * v2.z;
@@ -233,7 +225,14 @@ vec3 vec3_cross(vec3 v1, vec3 v2) {
 
 float vec3_mag(vec3 v) { return sqrtf(vec3_dot(v, v)); }
 
-vec3 vec3_norm(vec3 v) { return vec3_div(v, vec3_mag(v)); }
+vec3 vec3_norm(vec3 v) {
+  float mag = vec3_mag(v);
+  return (vec3){
+      v.x / vec3_mag(v),
+      v.y / vec3_mag(v),
+      v.z / vec3_mag(v),
+  };
+}
 
 mat4 mat4_mult(mat4 m1, mat4 m2) {
   vec4 row0 = {m1.col0.x, m1.col1.x, m1.col2.x, m1.col3.x};
@@ -427,8 +426,6 @@ int load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices) {
         int32_t v, vt, vn;
         p = obj_parse_indices(p, &v, &vt, &vn);
 
-        // printf("%d/%d/%d\n", v, vt, vn);
-
         Vertex vert;
         vert.position = vs.items[v - 1];
         if (vt != 0) vert.uv = vts.items[vt - 1];
@@ -475,6 +472,8 @@ int load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices) {
 
   *vertices = mesh_verts.items;
   *vertex_count = mesh_verts.size;
+
+  DARRAY_FREE(face_verts);
 
   return 0;
 }

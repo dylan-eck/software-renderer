@@ -118,10 +118,13 @@ char *obj_parse_indices(char *p, int32_t *v_idx, int32_t *vt_idx,
                         int32_t *vn_idx);
 int load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices);
 
+float get_max_dist(uint32_t vertex_count, const Vertex *vertices);
+void get_aabb(const uint32_t vertex_count, const Vertex *vertices, vec3 *bbtl,
+              vec3 *bbbr);
 void set_pixel(uint32_t *pixels, size_t index, float r, float g, float b);
 void render(const uint32_t vertex_count, const Vertex *vertices,
             uint32_t *color_buffer, float *depth_buffer, const uint32_t width,
-            const uint32_t height);
+            const uint32_t height, mat4 view_matrix);
 
 void write_uint32_t_le(uint8_t *buffer, uint32_t data);
 int write_bmp_image(const char *file_name, int32_t width, int32_t height,
@@ -160,6 +163,14 @@ int main(int argc, char **argv) {
     vertices[i].position = vec3_sub(vertices[i].position, avg_position);
   }
 
+  float max_dist = get_max_dist(vertex_count, vertices) * 1.1f;
+  float camera_dist = fabsf(max_dist / sinf(3.1415f / 4 * 0.5f));
+  printf("max dist %f\n", max_dist);
+  printf("camera dist %f\n", camera_dist);
+
+  mat4 view_matrix = mat4_look_at((vec3){0, 0, camera_dist}, (vec3){0, 0, 0},
+                                  (vec3){0, -1, 0});
+
   uint32_t *color_buffer = calloc(WIDTH * HEIGHT, sizeof(*color_buffer));
   if (color_buffer == NULL) {
     free(vertices);
@@ -175,7 +186,8 @@ int main(int argc, char **argv) {
     return EXIT_FAILURE;
   }
 
-  render(vertex_count, vertices, color_buffer, depth_buffer, WIDTH, HEIGHT);
+  render(vertex_count, vertices, color_buffer, depth_buffer, WIDTH, HEIGHT,
+         view_matrix);
 
   if (write_bmp_image(OUPUT_FILE_NAME, WIDTH, HEIGHT, color_buffer) != 0) {
     perror("Error writing output image: ");
@@ -355,17 +367,17 @@ char *obj_parse_indices(char *p, int32_t *v_idx, int32_t *vt_idx,
 }
 
 void print_pbar(float progress, int length, const char *prefix) {
-  if (progress >= 1) {
-    printf("\r%sdone%*s", prefix, length, "");
-    return;
-  }
+  // if (progress >= 1) {
+  //   printf("\r%sdone%*s\n", prefix, length, "");
+  //   return;
+  // }
 
-  printf("\r%s[", prefix);
-  for (int i = 0; i < length; i++) {
-    putchar(i < (int)(progress * length) ? '#' : ' ');
-  }
-  printf("]");
-  fflush(stdout);
+  // printf("\r%s[", prefix);
+  // for (int i = 0; i < length; i++) {
+  //   putchar(i < (int)(progress * length) ? '#' : ' ');
+  // }
+  // printf("]");
+  // fflush(stdout);
 }
 
 int load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices) {
@@ -450,16 +462,16 @@ int load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices) {
     p++;
   }
   print_pbar(1, 30, "loading model: ");
-  printf("\n");
 
   free(start);
-  DARRAY_FREE(vs);
-  DARRAY_FREE(vts);
-  DARRAY_FREE(vns);
 
   if (vns.size == 0) {
     calculate_normals_flat(mesh_verts.size, mesh_verts.items);
   }
+
+  DARRAY_FREE(vs);
+  DARRAY_FREE(vts);
+  DARRAY_FREE(vns);
 
   *vertices = mesh_verts.items;
   *vertex_count = mesh_verts.size;
@@ -517,12 +529,22 @@ bool is_in_view(vec4 clip_pos) {
 
 float barycentric_lerp(vec3 v, vec3 w) {
   float w_sum = w.x + w.y + w.z;
-  return (v.x * w.x + v.y * w.y + v.z * w.z) / w_sum;
+  return (v.x * w.y + v.y * w.z + v.z * w.x) / w_sum;
+}
+
+float get_max_dist(uint32_t vertex_count, const Vertex *vertices) {
+  float max_dist_sq = 0;
+  for (uint32_t i = 0; i < vertex_count; i++) {
+    vec3 p = vertices[i].position;
+    float dist_sq = vec3_dot(p, p);
+    max_dist_sq = (dist_sq > max_dist_sq) ? dist_sq : max_dist_sq;
+  }
+  return sqrtf(max_dist_sq);
 }
 
 void render(const uint32_t vertex_count, const Vertex *vertices,
             uint32_t *color_buffer, float *depth_buffer, const uint32_t width,
-            const uint32_t height) {
+            const uint32_t height, mat4 view_matrix) {
 
   for (size_t i = 0; i < width * height; i++) {
     set_pixel(color_buffer, i, 0, 0, 0);
@@ -531,13 +553,10 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
 
   mat4 model_mat = mat4_scale(1.0f);
 
-  mat4 view_mat =
-      mat4_look_at((vec3){0, 0, 50}, (vec3){0, 0, 0}, (vec3){0, -1, 0});
-
   mat4 projection_mat =
       mat4_perspective((float)width / height, 3.1415f / 4, 0.1f, 400.0f);
 
-  mat4 transform = mat4_mult(mat4_mult(projection_mat, view_mat), model_mat);
+  mat4 transform = mat4_mult(mat4_mult(projection_mat, view_matrix), model_mat);
 
   vec3 sun_direction = vec3_norm((vec3){.x = 0, .y = -1, .z = 0});
 
@@ -619,7 +638,6 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
     }
   }
   print_pbar(1, 30, "    rendering: ");
-  printf("\n");
 }
 
 void write_uint32_t_le(uint8_t *buffer, uint32_t data) {

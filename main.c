@@ -44,7 +44,7 @@
       else                                                                     \
         array.capacity *= 2;                                                   \
       array.items =                                                            \
-          realloc(array.items, array.capacity * sizeof(*array.items));         \
+        realloc(array.items, array.capacity * sizeof(*array.items));           \
     }                                                                          \
     array.items[array.size++] = item;                                          \
   } while (0)
@@ -58,9 +58,7 @@
 
 /* GLOBALS ================================================================== */
 // See the end of this file for teapot model data
-enum { TEAPOT_VERTEX_COUNT = 255, TEAPOT_INDEX_COUNT = 351 };
-extern const float TEAPOT_VERTICES[];
-extern const uint8_t TEAPOT_INDICES[];
+const char *TEAPOT_OBJ;
 
 static const uint32_t WIDTH = 1920;
 static const uint32_t HEIGHT = 1080;
@@ -102,6 +100,12 @@ vec3 vec3_cross(vec3 v1, vec3 v2);
 float vec3_mag(vec3 v);
 vec3 vec3_norm(vec3 v);
 
+fix2 fxvec2_create(float x, float y);
+float fx_to_float(fix32_t n);
+fix32_t fx_mult(fix32_t a, fix32_t b);
+fix2 fxvec2_sub(fix2 a, fix2 b);
+fix32_t fx_signed_area(fix2 a, fix2 b, fix2 c);
+
 mat4 mat4_mult(mat4 m1, mat4 m2);
 vec4 mat4_vec4_mult(mat4 m, vec4 v);
 
@@ -109,14 +113,20 @@ mat4 mat4_scale(float factor);
 mat4 mat4_look_at(vec3 eye, vec3 target, vec3 up);
 mat4 mat4_perspective(float aspect, float fov, float near, float far);
 
+void print_progress_bar(float progress, int length, const char *prefix);
+
 void calculate_normals_flat(size_t vertex_count, Vertex *vertices);
-int load_teapot(size_t *vertex_count, Vertex **vertices);
 char *obj_parse_indices(char *p, int32_t *v_idx, int32_t *vt_idx,
                         int32_t *vn_idx);
-int load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices);
+void load_file(const char *file_path, long *file_size, char **file);
+int parse_obj_str(long file_size, char *file, size_t *vertex_count,
+                  Vertex **vertices);
 
 float get_max_dist(uint32_t vertex_count, const Vertex *vertices);
 void set_pixel(uint32_t *pixels, size_t index, float r, float g, float b);
+int fill_rule_bias(fix2 p0, fix2 p1);
+bool is_in_view(vec4 clip_pos);
+float barycentric_lerp(vec3 v, vec3 w);
 void render(const uint32_t vertex_count, const Vertex *vertices,
             uint32_t *color_buffer, float *depth_buffer, const uint32_t width,
             const uint32_t height, mat4 view_matrix);
@@ -133,15 +143,13 @@ int main(int argc, char **argv) {
   Vertex *vertices;
 
   if (argc == 1) {
-    if (load_teapot(&vertex_count, &vertices) != 0) {
-      perror("Error loading teapot model: ");
-      return EXIT_FAILURE;
-    }
+    parse_obj_str(strlen(TEAPOT_OBJ), (char *)TEAPOT_OBJ, &vertex_count,
+                  &vertices);
   } else if (argc == 2) {
-    if (load_obj(argv[1], &vertex_count, &vertices) != 0) {
-      fprintf(stderr, "Error loading file %s: %s\n", argv[1], strerror(errno));
-      return EXIT_FAILURE;
-    }
+    char *fp;
+    long flen;
+    load_file(argv[1], &flen, &fp);
+    parse_obj_str(flen, fp, &vertex_count, &vertices);
   } else {
     fprintf(stderr, "Error: Invalid command line arguments");
     return EXIT_FAILURE;
@@ -167,8 +175,8 @@ int main(int argc, char **argv) {
   float min_fov = (WIDTH >= HEIGHT) ? FOV_Y : (FOV_Y * (float)WIDTH / HEIGHT);
   float camera_dist = fabsf(max_dist / sinf(min_fov * 0.5f));
 
-  mat4 view_matrix = mat4_look_at((vec3){0, 0, camera_dist}, (vec3){0, 0, 0},
-                                  (vec3){0, -1, 0});
+  mat4 view_matrix =
+    mat4_look_at((vec3){0, 0, camera_dist}, (vec3){0, 0, 0}, (vec3){0, -1, 0});
 
   uint32_t *color_buffer = calloc(WIDTH * HEIGHT, sizeof(*color_buffer));
   if (color_buffer == NULL) {
@@ -218,9 +226,9 @@ float vec4_dot(vec4 v1, vec4 v2) {
 
 vec3 vec3_cross(vec3 v1, vec3 v2) {
   return (vec3){
-      v1.y * v2.z - v1.z * v2.y,
-      v1.z * v2.x - v1.x * v2.z,
-      v1.x * v2.y - v1.y * v2.x,
+    v1.y * v2.z - v1.z * v2.y,
+    v1.z * v2.x - v1.x * v2.z,
+    v1.x * v2.y - v1.y * v2.x,
   };
 }
 
@@ -229,10 +237,31 @@ float vec3_mag(vec3 v) { return sqrtf(vec3_dot(v, v)); }
 vec3 vec3_norm(vec3 v) {
   float mag = vec3_mag(v);
   return (vec3){
-      v.x / vec3_mag(v),
-      v.y / vec3_mag(v),
-      v.z / vec3_mag(v),
+    v.x / vec3_mag(v),
+    v.y / vec3_mag(v),
+    v.z / vec3_mag(v),
   };
+}
+
+fix2 fxvec2_create(float x, float y) {
+  return (fix2){roundf(x * (1 << FIX_SHIFT)), roundf(y * (1 << FIX_SHIFT))};
+}
+
+float fx_to_float(fix32_t n) {
+  return (n >> FIX_SHIFT) + (float)(n & FIX_MASK) / (1 << FIX_SHIFT);
+}
+
+fix32_t fx_mult(fix32_t a, fix32_t b) {
+  return (fix32_t)(((int64_t)a * b) >> FIX_SHIFT);
+}
+
+fix2 fxvec2_sub(fix2 a, fix2 b) { return (fix2){a.x - b.x, a.y - b.y}; }
+
+fix32_t fx_signed_area(fix2 a, fix2 b, fix2 c) {
+  fix2 c_sub_a = fxvec2_sub(c, a);
+  fix2 b_sub_a = fxvec2_sub(b, a);
+
+  return (fx_mult(c_sub_a.x, b_sub_a.y) - fx_mult(b_sub_a.x, c_sub_a.y));
 }
 
 mat4 mat4_mult(mat4 m1, mat4 m2) {
@@ -265,10 +294,10 @@ vec4 mat4_vec4_mult(mat4 m, vec4 v) {
 
 mat4 mat4_scale(float factor) {
   return (mat4){
-      {factor, 0, 0, 0},
-      {0, factor, 0, 0},
-      {0, 0, factor, 0},
-      {0, 0, 0, 1},
+    {factor, 0, 0, 0},
+    {0, factor, 0, 0},
+    {0, 0, factor, 0},
+    {0, 0, 0, 1},
   };
 }
 
@@ -282,18 +311,32 @@ mat4 mat4_look_at(vec3 eye, vec3 target, vec3 up) {
   m.col1 = (vec4){s.y, u.y, f.y, 0.0f};
   m.col2 = (vec4){s.z, u.z, f.z, 0.0f};
   m.col3 =
-      (vec4){-vec3_dot(s, eye), -vec3_dot(u, eye), -vec3_dot(f, eye), 1.0f};
+    (vec4){-vec3_dot(s, eye), -vec3_dot(u, eye), -vec3_dot(f, eye), 1.0f};
 
   return m;
 }
 
 mat4 mat4_perspective(float aspect, float fov, float near, float far) {
   return (mat4){
-      {1 / (aspect * tanf(fov / 2)), 0, 0, 0},
-      {0, 1 / tanf(fov / 2), 0, 0},
-      {0, 0, far / (far - near), 1},
-      {0, 0, -far * near / (far - near), 0},
+    {1 / (aspect * tanf(fov / 2)), 0, 0, 0},
+    {0, 1 / tanf(fov / 2), 0, 0},
+    {0, 0, far / (far - near), 1},
+    {0, 0, -far * near / (far - near), 0},
   };
+}
+
+void print_progress_bar(float progress, int length, const char *prefix) {
+  if (progress >= 1) {
+    printf("\r%sdone%*s\n", prefix, length, "");
+    return;
+  }
+
+  printf("\r%s[", prefix);
+  for (int i = 0; i < length; i++) {
+    putchar(i < (int)(progress * length) ? '#' : ' ');
+  }
+  printf("]");
+  fflush(stdout);
 }
 
 void calculate_normals_flat(size_t vertex_count, Vertex *vertices) {
@@ -314,41 +357,6 @@ void calculate_normals_flat(size_t vertex_count, Vertex *vertices) {
   }
 }
 
-int load_teapot(size_t *vertex_count, Vertex **vertices) {
-  *vertices = NULL;
-  *vertex_count = 0;
-
-  Vertex *verts = malloc(2 * TEAPOT_INDEX_COUNT * sizeof(*verts));
-  if (verts == NULL) return -1;
-
-  for (int i = 0; i < TEAPOT_INDEX_COUNT; i += 3) {
-    for (int j = 0; j < 3; j++) {
-      int vidx = TEAPOT_INDICES[i + j] * 3;
-
-      Vertex v;
-      v.position.x = TEAPOT_VERTICES[vidx + 0];
-      v.position.y = TEAPOT_VERTICES[vidx + 1];
-      v.position.z = TEAPOT_VERTICES[vidx + 2];
-
-      verts[i + j] = v;
-
-      // The teapot model data only contains half of the teapot, so we
-      // have to mirror all of the vertices
-      v.position.z *= -1;
-      // reverse order of mirrored verts to preserve counter-clockwise
-      // winding order
-      verts[i + 2 - j + TEAPOT_INDEX_COUNT] = v;
-    }
-  }
-
-  calculate_normals_flat(2 * TEAPOT_INDEX_COUNT, verts);
-
-  *vertex_count = 2 * TEAPOT_INDEX_COUNT;
-  *vertices = verts;
-
-  return 0;
-}
-
 char *obj_parse_indices(char *p, int32_t *v_idx, int32_t *vt_idx,
                         int32_t *vn_idx) {
   int32_t idxs[3] = {0};
@@ -366,37 +374,24 @@ char *obj_parse_indices(char *p, int32_t *v_idx, int32_t *vt_idx,
   return p;
 }
 
-void print_pbar(float progress, int length, const char *prefix) {
-  // if (progress >= 1) {
-  //   printf("\r%sdone%*s\n", prefix, length, "");
-  //   return;
-  // }
-
-  // printf("\r%s[", prefix);
-  // for (int i = 0; i < length; i++) {
-  //   putchar(i < (int)(progress * length) ? '#' : ' ');
-  // }
-  // printf("]");
-  // fflush(stdout);
-}
-
-int load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices) {
-  *vertices = NULL;
-  *vertex_count = 0;
-
+void load_file(const char *file_path, long *file_size, char **file) {
   FILE *fp = fopen(file_path, "rb");
-  if (fp == NULL) return -1;
 
   fseek(fp, 0L, SEEK_END);
-  long flen = ftell(fp);
+  *file_size = ftell(fp);
   rewind(fp);
 
-  char *start = malloc(flen + 1);
-  if (start == NULL) return -1;
+  *file = malloc(*file_size + 1);
 
-  size_t n = fread(start, sizeof(start[0]), flen, fp);
-  start[n] = '\0';
+  size_t n = fread(*file, sizeof((*file)[0]), *file_size, fp);
+  (*file)[n] = '\0';
   fclose(fp);
+}
+
+int parse_obj_str(long file_size, char *file, size_t *vertex_count,
+                  Vertex **vertices) {
+  char *start = file;
+  long flen = file_size;
 
   vec3_da vs = {0};
   vec2_da vts = {0};
@@ -410,7 +405,7 @@ int load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices) {
   while (p < end) {
     size_t i = p - start;
     if ((i * 3) % 10000 == 0) {
-      print_pbar((float)i / flen, 30, "loading model: ");
+      print_progress_bar((float)i / flen, 30, "loading model: ");
     }
 
     if (p != start && *(p - 1) != '\n') {
@@ -459,9 +454,7 @@ int load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices) {
 
     p++;
   }
-  print_pbar(1, 30, "loading model: ");
-
-  free(start);
+  print_progress_bar(1, 30, "loading model: ");
 
   if (vns.size == 0) {
     calculate_normals_flat(mesh_verts.size, mesh_verts.items);
@@ -479,6 +472,16 @@ int load_obj(const char *file_path, size_t *vertex_count, Vertex **vertices) {
   return 0;
 }
 
+float get_max_dist(uint32_t vertex_count, const Vertex *vertices) {
+  float max_dist_sq = 0;
+  for (uint32_t i = 0; i < vertex_count; i++) {
+    vec3 p = vertices[i].position;
+    float dist_sq = vec3_dot(p, p);
+    max_dist_sq = (dist_sq > max_dist_sq) ? dist_sq : max_dist_sq;
+  }
+  return sqrtf(max_dist_sq);
+}
+
 void set_pixel(uint32_t *color_buffer, size_t index, float r, float g,
                float b) {
   uint8_t rn = fminf(fmaxf(r, 0.0f), 1.0f) * 255;
@@ -486,28 +489,6 @@ void set_pixel(uint32_t *color_buffer, size_t index, float r, float g,
   uint8_t bn = fminf(fmaxf(b, 0.0f), 1.0f) * 255;
 
   color_buffer[index] = (0xFF << 24) | (rn << 16) | (gn << 8) | bn;
-}
-
-fix2 fxvec2_create(float x, float y) {
-  return (fix2){roundf(x * (1 << FIX_SHIFT)), roundf(y * (1 << FIX_SHIFT))};
-}
-
-float fx_to_float(fix32_t n) {
-  return (n >> FIX_SHIFT) + (float)(n & FIX_MASK) / (1 << FIX_SHIFT);
-}
-
-fix32_t fx_mult(fix32_t a, fix32_t b) {
-  return (fix32_t)(((int64_t)a * b) >> FIX_SHIFT);
-}
-
-fix2 fxvec2_sub(fix2 a, fix2 b) { return (fix2){a.x - b.x, a.y - b.y}; }
-
-fix32_t fxvec2_cross(fix2 a, fix2 b) {
-  return fx_mult(a.x, b.y) - fx_mult(b.x, a.y);
-}
-
-fix32_t fx_signed_area(fix2 a, fix2 b, fix2 c) {
-  return fxvec2_cross(fxvec2_sub(c, a), fxvec2_sub(b, a));
 }
 
 int fill_rule_bias(fix2 p0, fix2 p1) {
@@ -532,16 +513,6 @@ float barycentric_lerp(vec3 v, vec3 w) {
   return (v.x * w.y + v.y * w.z + v.z * w.x) / w_sum;
 }
 
-float get_max_dist(uint32_t vertex_count, const Vertex *vertices) {
-  float max_dist_sq = 0;
-  for (uint32_t i = 0; i < vertex_count; i++) {
-    vec3 p = vertices[i].position;
-    float dist_sq = vec3_dot(p, p);
-    max_dist_sq = (dist_sq > max_dist_sq) ? dist_sq : max_dist_sq;
-  }
-  return sqrtf(max_dist_sq);
-}
-
 void render(const uint32_t vertex_count, const Vertex *vertices,
             uint32_t *color_buffer, float *depth_buffer, const uint32_t width,
             const uint32_t height, mat4 view_matrix) {
@@ -554,7 +525,7 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
   mat4 model_mat = mat4_scale(1.0f);
 
   mat4 projection_mat =
-      mat4_perspective((float)width / height, 3.1415f / 4, 0.1f, 400.0f);
+    mat4_perspective((float)width / height, 3.1415f / 4, 0.1f, 400.0f);
 
   mat4 transform = mat4_mult(mat4_mult(projection_mat, view_matrix), model_mat);
 
@@ -562,7 +533,7 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
 
   for (size_t i = 0; i < vertex_count; i += 3) {
     if ((i * 3) % 10000 == 0) {
-      print_pbar((float)i / vertex_count, 30, "    rendering: ");
+      print_progress_bar((float)i / vertex_count, 30, "    rendering: ");
     }
 
     vec3 scr_pos[3];
@@ -579,9 +550,9 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
       normals[j] = vec3_norm((vec3){wn.x, wn.y, wn.z});
 
       scr_pos[j] = (vec3){
-          clip_pos.x / clip_pos.w * 0.5 + 0.5,
-          clip_pos.y / clip_pos.w * 0.5 + 0.5,
-          clip_pos.z / clip_pos.w,
+        clip_pos.x / clip_pos.w * 0.5 + 0.5,
+        clip_pos.y / clip_pos.w * 0.5 + 0.5,
+        clip_pos.z / clip_pos.w,
       };
     }
     if (clip_count == 3) continue; // triangle completely out of view
@@ -614,7 +585,7 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
         vec3 weights = {fx_to_float(a0), fx_to_float(a1), fx_to_float(a2)};
 
         float depth = barycentric_lerp(
-            (vec3){scr_pos[0].z, scr_pos[1].z, scr_pos[2].z}, weights);
+          (vec3){scr_pos[0].z, scr_pos[1].z, scr_pos[2].z}, weights);
 
         int idx = x + y * width;
         if (depth >= depth_buffer[idx]) continue;
@@ -625,9 +596,9 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
         vec3 nz = (vec3){normals[0].z, normals[1].z, normals[2].z};
 
         vec3 normal = {
-            barycentric_lerp(nx, weights),
-            barycentric_lerp(ny, weights),
-            barycentric_lerp(nz, weights),
+          barycentric_lerp(nx, weights),
+          barycentric_lerp(ny, weights),
+          barycentric_lerp(nz, weights),
         };
 
         float ambient = 0.1;
@@ -637,7 +608,7 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
       }
     }
   }
-  print_pbar(1, 30, "    rendering: ");
+  print_progress_bar(1, 30, "    rendering: ");
 }
 
 void write_uint32_t_le(uint8_t *buffer, uint32_t data) {
@@ -689,51 +660,72 @@ int write_bmp_image(const char *file_name, int32_t width, int32_t height,
 
 /* TEAPOT MODEL DATA ======================================================== */
 // Original model data from https://graphics.cs.utah.edu/teapot/
-const float TEAPOT_VERTICES[TEAPOT_VERTEX_COUNT] = {
-    0.48f, 1.95f, 0.23f, 0.38f, 2.04f, 0.00f, 0.00f, 1.65f, 0.00f, 0.15f, 1.65f,
-    0.23f, 0.59f, 1.85f, 0.00f, 0.30f, 1.65f, 0.00f, 1.43f, 2.10f, 0.00f, 1.48f,
-    1.99f, 0.23f, 1.33f, 1.87f, 0.00f, 0.27f, 1.01f, 0.00f, 0.37f, 1.10f, 0.23f,
-    0.46f, 1.20f, 0.00f, 1.00f, 0.75f, 0.00f, 1.23f, 0.47f, 0.23f, 1.21f, 0.32f,
-    0.00f, 6.00f, 2.25f, 0.11f, 5.80f, 2.25f, 0.00f, 5.83f, 2.31f, 0.00f, 6.13f,
-    2.32f, 0.15f, 6.20f, 2.25f, 0.00f, 6.43f, 2.33f, 0.00f, 5.70f, 2.25f, 0.00f,
-    6.00f, 2.25f, 0.19f, 6.30f, 2.25f, 0.00f, 5.39f, 1.65f, 0.00f, 5.54f, 1.47f,
-    0.34f, 5.69f, 1.29f, 0.00f, 4.87f, 1.37f, 0.00f, 4.76f, 0.91f, 0.48f, 4.96f,
-    0.75f, 0.11f, 4.97f, 0.68f, 0.00f, 3.00f, 3.00f, 0.00f, 2.67f, 2.83f, 0.00f,
-    2.77f, 2.83f, 0.23f, 3.00f, 2.83f, 0.33f, 2.80f, 2.55f, 0.00f, 2.86f, 2.55f,
-    0.14f, 3.00f, 2.55f, 0.20f, 3.23f, 2.83f, 0.23f, 3.33f, 2.83f, 0.00f, 3.14f,
-    2.55f, 0.14f, 3.20f, 2.55f, 0.00f, 2.17f, 2.40f, 0.00f, 2.42f, 2.40f, 0.58f,
-    3.00f, 2.40f, 0.82f, 1.70f, 2.25f, 0.00f, 2.08f, 2.25f, 0.92f, 3.00f, 2.25f,
-    1.30f, 3.58f, 2.40f, 0.58f, 3.83f, 2.40f, 0.00f, 3.92f, 2.25f, 0.92f, 4.30f,
-    2.25f, 0.00f, 2.01f, 2.25f, 0.99f, 1.60f, 2.25f, 0.00f, 1.60f, 2.35f, 0.00f,
-    2.01f, 2.35f, 0.99f, 3.00f, 2.25f, 1.40f, 3.00f, 2.35f, 1.40f, 1.50f, 2.25f,
-    0.00f, 1.94f, 2.25f, 1.06f, 3.00f, 2.25f, 1.50f, 3.99f, 2.25f, 0.99f, 3.99f,
-    2.35f, 0.99f, 4.40f, 2.25f, 0.00f, 4.40f, 2.35f, 0.00f, 4.06f, 2.25f, 1.06f,
-    4.50f, 2.25f, 0.00f, 1.70f, 1.47f, 1.30f, 3.00f, 1.47f, 1.84f, 1.16f, 1.47f,
-    0.00f, 1.59f, 0.75f, 1.41f, 3.00f, 0.75f, 2.00f, 4.30f, 1.47f, 1.30f, 4.84f,
-    1.47f, 0.00f, 4.41f, 0.75f, 1.41f, 1.76f, 0.23f, 1.24f, 3.00f, 0.23f, 1.75f,
-    1.25f, 0.23f, 0.00f, 1.50f, 0.00f, 0.00f, 1.94f, 0.00f, 1.06f, 3.00f, 0.00f,
-    1.50f, 4.24f, 0.23f, 1.24f, 4.06f, 0.00f, 1.06f, 4.75f, 0.23f, 0.00f, 4.50f,
-    0.00f, 0.00f,
-};
-
-const uint8_t TEAPOT_INDICES[TEAPOT_INDEX_COUNT] = {
-    0,  1,  2,  0,  2,  3,  4,  0,  3,  4,  3,  5,  6,  0,  7,  6,  1,  0,  8,
-    7,  0,  8,  0,  4,  3,  2,  9,  3,  9,  10, 5,  3,  10, 5,  10, 11, 12, 10,
-    13, 12, 11, 10, 13, 9,  14, 13, 10, 9,  15, 16, 17, 15, 17, 18, 19, 15, 18,
-    19, 18, 20, 18, 17, 21, 18, 21, 22, 20, 18, 22, 20, 22, 23, 22, 21, 24, 22,
-    24, 25, 23, 22, 25, 23, 25, 26, 27, 28, 25, 27, 25, 24, 29, 25, 28, 29, 26,
-    25, 29, 30, 26, 31, 32, 33, 31, 33, 34, 33, 32, 35, 33, 35, 36, 34, 33, 36,
-    34, 36, 37, 31, 34, 38, 31, 38, 39, 38, 34, 37, 38, 37, 40, 39, 38, 40, 39,
-    40, 41, 36, 35, 42, 36, 42, 43, 37, 36, 43, 37, 43, 44, 43, 42, 45, 43, 45,
-    46, 44, 43, 46, 44, 46, 47, 40, 37, 44, 40, 44, 48, 41, 40, 48, 41, 48, 49,
-    48, 44, 47, 48, 47, 50, 49, 48, 50, 49, 50, 51, 52, 53, 54, 52, 54, 55, 56,
-    52, 55, 56, 55, 57, 55, 54, 58, 55, 58, 59, 57, 55, 59, 57, 59, 60, 61, 56,
-    57, 61, 57, 62, 63, 61, 62, 63, 62, 64, 62, 57, 60, 62, 60, 65, 64, 62, 65,
-    64, 65, 66, 60, 59, 67, 60, 67, 68, 67, 69, 12, 67, 12, 70, 68, 67, 70, 68,
-    70, 71, 7,  58, 6,  7,  59, 58, 7,  67, 59, 7,  8,  69, 7,  69, 67, 65, 60,
-    68, 65, 68, 72, 66, 65, 72, 66, 72, 73, 72, 68, 71, 72, 71, 74, 27, 74, 28,
-    27, 72, 74, 27, 73, 72, 28, 74, 29, 71, 70, 75, 71, 75, 76, 75, 77, 78, 75,
-    78, 79, 76, 75, 79, 76, 79, 80, 13, 70, 12, 13, 75, 70, 13, 14, 77, 13, 77,
-    75, 74, 71, 76, 74, 76, 81, 81, 76, 80, 81, 80, 82, 83, 81, 82, 83, 82, 84,
-    29, 83, 30, 29, 81, 83, 29, 74, 81,
-};
+const char *TEAPOT_OBJ =
+  "v 6.1 0.96 0\nv 5.9 1.1 0.23\nv 5.8 1.2 0\nv 6.4 1.4 0\nv 6.3 1.4 0.23\nv "
+  "6.1 1.4 0\nv 5 0.9 0\nv 5 1 0.23\nv 5.1 1.1 0\nv 6.2 2 0\nv 6.1 1.9 0.23\nv "
+  "6 1.8 0\nv 5.4 2.2 0\nv 5.2 2.5 0.23\nv 5.2 2.7 0\nv 0.63 0.75 0\nv 0.43 "
+  "0.75 0.11\nv 0.23 0.75 0\nv 0.6 0.69 0\nv 0.3 0.68 0.15\nv 0 0.67 0\nv 0.73 "
+  "0.75 0\nv 0.43 0.75 0.19\nv 0.13 0.75 0\nv 1 1.4 0\nv 0.89 1.5 0.34\nv 0.74 "
+  "1.7 0\nv 1.6 1.6 0\nv 1.7 2.1 0.48\nv 1.5 2.2 0.11\nv 1.5 2.3 0\nv 3.4 0 "
+  "0\nv 3.8 0.17 0\nv 3.7 0.17 0.23\nv 3.4 0.17 0.33\nv 3.6 0.45 0\nv 3.6 0.45 "
+  "0.14\nv 3.4 0.45 0.2\nv 3.2 0.17 0.23\nv 3.1 0.17 0\nv 3.3 0.45 0.14\nv 3.2 "
+  "0.45 0\nv 4.3 0.6 0\nv 4 0.6 0.58\nv 3.4 0.6 0.82\nv 4.7 0.75 0\nv 4.3 0.75 "
+  "0.92\nv 3.4 0.75 1.3\nv 2.8 0.6 0.58\nv 2.6 0.6 0\nv 2.5 0.75 0.92\nv 2.1 "
+  "0.75 0\nv 4.8 0.75 0\nv 4.4 0.75 0.99\nv 3.4 0.75 1.4\nv 4.8 0.65 0\nv 4.4 "
+  "0.65 0.99\nv 3.4 0.65 1.4\nv 4.9 0.75 0\nv 4.5 0.75 1.1\nv 3.4 0.75 1.5\nv "
+  "2.4 0.75 0.99\nv 2 0.75 0\nv 2.4 0.65 0.99\nv 2 0.65 0\nv 2.4 0.75 1.1\nv "
+  "1.9 0.75 0\nv 5.3 1.5 0\nv 4.7 1.5 1.3\nv 3.4 1.5 1.8\nv 4.8 2.2 1.4\nv 3.4 "
+  "2.2 2\nv 2.1 1.5 1.3\nv 1.6 1.5 0\nv 2 2.2 1.4\nv 5.2 2.8 0\nv 4.7 2.8 "
+  "1.2\nv 3.4 2.8 1.8\nv 4.9 3 0\nv 4.5 3 1.1\nv 3.4 3 1.5\nv 2.2 2.8 1.2\nv "
+  "1.7 2.8 0\nv 2.4 3 1.1\nv 1.9 3 0\nvn 0.39 -0.79 0.48\nvn 0.029 -0.19 "
+  "0.98\nvn -0.26 0.85 0.45\nvn 0.81 -0.13 0.57\nvn 0.28 -0.092 0.96\nvn -0.78 "
+  "0.27 0.57\nvn 0.53 -0.72 0.45\nvn 0.77 -0.4 0.5\nvn 0.66 0.4 0.63\nvn 0.67 "
+  "0.53 0.52\nvn 0.11 0.091 0.99\nvn -0.7 -0.48 0.52\nvn 0.23 -0.69 0.69\nvn "
+  "0.76 0.46 0.46\nvn 0.73 0.54 0.42\nvn -0.45 0.29 -0.84\nvn -0.33 0.013 "
+  "-0.94\nvn 0.28 -0.82 -0.5\nvn -0.066 -0.97 -0.22\nvn -0.32 -0.71 0.63\nvn "
+  "-0.49 -0.28 0.82\nvn 0.55 -0.53 0.65\nvn -0.042 -0.31 0.95\nvn -0.5 0.49 "
+  "0.72\nvn 0.52 -0.58 0.62\nvn -0.15 -0.019 0.99\nvn -0.6 0.5 0.62\nvn -0.4 "
+  "-0.63 0.67\nvn -0.84 -0.14 0.53\nvn -0.71 0.52 0.47\nvn -0.75 0.51 0.42\nvn "
+  "-0 -0.94 0.34\nvn 0.89 -0.27 0.37\nvn 0.68 -0.29 0.68\nvn -0 -0.29 0.96\nvn "
+  "0.8 -0.51 0.33\nvn 0.6 -0.54 0.6\nvn -0 -0.54 0.84\nvn -0.68 -0.29 0.68\nvn "
+  "-0.89 -0.27 0.37\nvn -0.6 -0.54 0.6\nvn -0.8 -0.51 0.33\nvn 0.27 -0.96 "
+  "0.11\nvn 0.19 -0.96 0.19\nvn -0 -0.96 0.28\nvn 0.3 -0.95 0.12\nvn 0.21 "
+  "-0.95 0.21\nvn -0 -0.95 0.3\nvn -0.19 -0.96 0.19\nvn -0.27 -0.96 0.11\nvn "
+  "-0.21 -0.95 0.21\nvn -0.3 -0.95 0.12\nvn -0.92 -0.029 -0.38\nvn -0.71 "
+  "-0.032 -0.71\nvn -0 -0.032 -1\nvn -0.14 -0.99 -0.057\nvn -0.098 -0.99 "
+  "-0.098\nvn -0 -0.99 -0.14\nvn 0.79 -0.51 0.33\nvn 0.59 -0.54 0.59\nvn -0 "
+  "-0.54 0.84\nvn 0.71 -0.032 -0.71\nvn 0.92 -0.029 -0.38\nvn 0.098 -0.99 "
+  "-0.098\nvn 0.14 -0.99 -0.057\nvn -0.59 -0.54 0.59\nvn -0.79 -0.51 0.33\nvn "
+  "0.89 -0.28 0.37\nvn 0.67 -0.3 0.67\nvn -0 -0.3 0.95\nvn 0.7 0.11 0.7\nvn -0 "
+  "0.11 0.99\nvn -0.67 -0.3 0.67\nvn -0.89 -0.28 0.37\nvn -0.7 0.11 0.7\nvn "
+  "0.78 0.54 0.32\nvn 0.58 0.57 0.58\nvn -0 0.57 0.82\nvn 0.66 0.7 0.27\nvn "
+  "0.48 0.73 0.48\nvn -0 0.73 0.68\nvn -0.58 0.57 0.58\nvn -0.78 0.54 0.32\nvn "
+  "-0.48 0.73 0.48\nvn -0.66 0.7 0.27\ns 1\nf 2//2 1//1 4//4 5//5\nf 3//3 2//2 "
+  "5//5 6//6\nf 7//7 2//2 8//8\nf 7//7 1//1 2//2\nf 9//9 8//8 2//2\nf 9//9 "
+  "2//2 3//3\nf 5//5 4//4 10//10 11//11\nf 6//6 5//5 11//11 12//12\nf 13//13 "
+  "11//11 14//14\nf 13//13 12//12 11//11\nf 14//14 10//10 15//15\nf 14//14 "
+  "11//11 10//10\nf 17//17 16//16 19//19 20//20\nf 18//18 17//17 20//20 "
+  "21//21\nf 20//20 19//19 22//22 23//23\nf 21//21 20//20 23//23 24//24\nf "
+  "23//23 22//22 25//25 26//26\nf 24//24 23//23 26//26 27//27\nf 28//28 29//29 "
+  "26//26\nf 28//28 26//26 25//25\nf 30//30 26//26 29//29\nf 30//30 27//27 "
+  "26//26\nf 30//30 31//31 27//27\nf 32//32 33//33 34//34\nf 32//32 34//34 "
+  "35//35\nf 34//34 33//33 36//36 37//37\nf 35//35 34//34 37//37 38//38\nf "
+  "32//32 35//35 39//39\nf 32//32 39//39 40//40\nf 39//39 35//35 38//38 "
+  "41//41\nf 40//40 39//39 41//41 42//42\nf 37//37 36//36 43//43 44//44\nf "
+  "38//38 37//37 44//44 45//45\nf 44//44 43//43 46//46 47//47\nf 45//45 44//44 "
+  "47//47 48//48\nf 41//41 38//38 45//45 49//49\nf 42//42 41//41 49//49 "
+  "50//50\nf 49//49 45//45 48//48 51//51\nf 50//50 49//49 51//51 52//52\nf "
+  "54//54 53//53 56//56 57//57\nf 55//55 54//54 57//57 58//58\nf 57//57 56//56 "
+  "59//59 60//60\nf 58//58 57//57 60//60 61//61\nf 62//62 55//55 58//58 "
+  "64//64\nf 63//63 62//62 64//64 65//65\nf 64//64 58//58 61//61 66//66\nf "
+  "65//65 64//64 66//66 67//67\nf 61//61 60//60 69//69 70//70\nf 69//69 68//68 "
+  "13//13 71//71\nf 70//70 69//69 71//71 72//72\nf 8//8 59//59 7//7\nf 8//8 "
+  "60//60 59//59\nf 8//8 69//69 60//60\nf 8//8 9//9 68//68\nf 8//8 68//68 "
+  "69//69\nf 66//66 61//61 70//70 73//73\nf 67//67 66//66 73//73 74//74\nf "
+  "73//73 70//70 72//72 75//75\nf 28//28 75//75 29//29\nf 28//28 73//73 "
+  "75//75\nf 28//28 74//74 73//73\nf 29//29 75//75 30//30\nf 72//72 71//71 "
+  "77//77 78//78\nf 77//77 76//76 79//79 80//80\nf 78//78 77//77 80//80 "
+  "81//81\nf 14//14 71//71 13//13\nf 14//14 77//77 71//71\nf 14//14 15//15 "
+  "76//76\nf 14//14 76//76 77//77\nf 75//75 72//72 78//78 82//82\nf 82//82 "
+  "78//78 81//81 84//84\nf 83//83 82//82 84//84 85//85\nf 30//30 83//83 "
+  "31//31\nf 30//30 82//82 83//83\nf 30//30 75//75 82//82\n";

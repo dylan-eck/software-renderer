@@ -9,20 +9,25 @@
  * compiler should work.
  *
  * clang main.c OR gcc main.c OR cl main.c
+ *
+ * FEATURES:
+ *
+ * - Renders a single 3D model shaded using diffuse lighting.
+ * - Can load and render any (well formed!) obj file.
+ * - If no model is specified, renders a version of the Utah Teapot.
  */
 
 #include <errno.h>
-#include <float.h>
-#include <limits.h>
 #include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 
-/* MACROS =================================================================== */
+/*############################################################################*/
+/* MACROS                                                                     */
+/*############################################################################*/
 #define MIN(a, b) (((a) < (b)) ? (a) : (b))
 #define MAX(a, b) (((a) > (b)) ? (a) : (b))
 
@@ -56,7 +61,9 @@
     free(array.items);                                                         \
   } while (0);
 
-/* GLOBALS ================================================================== */
+/*############################################################################*/
+/* GLOBALS                                                                    */
+/*############################################################################*/
 // See the end of this file for teapot model data
 const char *TEAPOT_OBJ;
 
@@ -66,7 +73,9 @@ static const float FOV_Y = 3.1415f / 4;
 
 static const char *OUPUT_FILE_NAME = "out.bmp";
 
-/* TYPE DEFINITIONS ========================================================= */
+/*############################################################################*/
+/* TYPE DEFINITIONS                                                           */
+/*############################################################################*/
 // clang-format off
 typedef int32_t fix32_t;
 
@@ -90,43 +99,33 @@ DARRAY_DEFINE(vec2, vec2_da);
 DARRAY_DEFINE(vec3, vec3_da);
 DARRAY_DEFINE(Vertex, Vertex_da);
 
-/* FUNCTION DECLARATIONS ==================================================== */
+/*############################################################################*/
+/* FUNCTION DECLARATIONS                                                      */
+/*############################################################################*/
 vec3 vec3_sub(vec3 v1, vec3 v2);
-
 float vec3_dot(vec3 v1, vec3 v2);
 float vec4_dot(vec4 v1, vec4 v2);
 vec3 vec3_cross(vec3 v1, vec3 v2);
-
-float vec3_mag(vec3 v);
 vec3 vec3_norm(vec3 v);
 
 fix2 fxvec2_create(float x, float y);
-float fx_to_float(fix32_t n);
-fix32_t fx_mult(fix32_t a, fix32_t b);
-fix2 fxvec2_sub(fix2 a, fix2 b);
 fix32_t fx_signed_area(fix2 a, fix2 b, fix2 c);
 
 mat4 mat4_mult(mat4 m1, mat4 m2);
 vec4 mat4_vec4_mult(mat4 m, vec4 v);
 
-mat4 mat4_scale(float factor);
 mat4 mat4_look_at(vec3 eye, vec3 target, vec3 up);
 mat4 mat4_perspective(float aspect, float fov, float near, float far);
 
 void print_progress_bar(float progress, int length, const char *prefix);
 
-void calculate_normals_flat(size_t vertex_count, Vertex *vertices);
+void load_file(const char *file_path, long *file_size, char **file);
 char *obj_parse_indices(char *p, int32_t *v_idx, int32_t *vt_idx,
                         int32_t *vn_idx);
-void load_file(const char *file_path, long *file_size, char **file);
 int parse_obj_str(long file_size, char *file, size_t *vertex_count,
                   Vertex **vertices);
 
-float get_max_dist(uint32_t vertex_count, const Vertex *vertices);
-void set_pixel(uint32_t *pixels, size_t index, float r, float g, float b);
 int fill_rule_bias(fix2 p0, fix2 p1);
-bool is_in_view(vec4 clip_pos);
-float barycentric_lerp(vec3 v, vec3 w);
 void render(const uint32_t vertex_count, const Vertex *vertices,
             uint32_t *color_buffer, float *depth_buffer, const uint32_t width,
             const uint32_t height, mat4 view_matrix);
@@ -135,10 +134,10 @@ void write_uint32_t_le(uint8_t *buffer, uint32_t data);
 int write_bmp_image(const char *file_name, int32_t width, int32_t height,
                     const uint32_t *pixels);
 
-/* MAIN ===================================================================== */
+/*############################################################################*/
+/* MAIN                                                                       */
+/*############################################################################*/
 int main(int argc, char **argv) {
-  srand(time(NULL));
-
   size_t vertex_count;
   Vertex *vertices;
 
@@ -171,7 +170,13 @@ int main(int argc, char **argv) {
   }
 
   // ensure that model is fully visible
-  float max_dist = get_max_dist(vertex_count, vertices) * 1.1f;
+  float max_dist = 0;
+  for (uint32_t i = 0; i < vertex_count; i++) {
+    vec3 p = vertices[i].position;
+    float dist_sq = vec3_dot(p, p);
+    max_dist = (dist_sq > max_dist) ? dist_sq : max_dist;
+  }
+  max_dist = sqrtf(max_dist) * 1.1f;
   float min_fov = (WIDTH >= HEIGHT) ? FOV_Y : (FOV_Y * (float)WIDTH / HEIGHT);
   float camera_dist = fabsf(max_dist / sinf(min_fov * 0.5f));
 
@@ -211,7 +216,9 @@ int main(int argc, char **argv) {
   return EXIT_SUCCESS;
 }
 
-/* FUNCTION IMPLEMENTATIONS ================================================= */
+/*############################################################################*/
+/* FUNCTION IMPLEMENTATIONS                                                   */
+/*############################################################################*/
 vec3 vec3_sub(vec3 v1, vec3 v2) {
   return (vec3){v1.x - v2.x, v1.y - v2.y, v1.z - v2.z};
 }
@@ -232,14 +239,12 @@ vec3 vec3_cross(vec3 v1, vec3 v2) {
   };
 }
 
-float vec3_mag(vec3 v) { return sqrtf(vec3_dot(v, v)); }
-
 vec3 vec3_norm(vec3 v) {
-  float mag = vec3_mag(v);
+  float mag = sqrtf(vec3_dot(v, v));
   return (vec3){
-    v.x / vec3_mag(v),
-    v.y / vec3_mag(v),
-    v.z / vec3_mag(v),
+    v.x / mag,
+    v.y / mag,
+    v.z / mag,
   };
 }
 
@@ -247,21 +252,14 @@ fix2 fxvec2_create(float x, float y) {
   return (fix2){roundf(x * (1 << FIX_SHIFT)), roundf(y * (1 << FIX_SHIFT))};
 }
 
-float fx_to_float(fix32_t n) {
-  return (n >> FIX_SHIFT) + (float)(n & FIX_MASK) / (1 << FIX_SHIFT);
-}
-
-fix32_t fx_mult(fix32_t a, fix32_t b) {
-  return (fix32_t)(((int64_t)a * b) >> FIX_SHIFT);
-}
-
-fix2 fxvec2_sub(fix2 a, fix2 b) { return (fix2){a.x - b.x, a.y - b.y}; }
-
 fix32_t fx_signed_area(fix2 a, fix2 b, fix2 c) {
-  fix2 c_sub_a = fxvec2_sub(c, a);
-  fix2 b_sub_a = fxvec2_sub(b, a);
+  fix2 c_sub_a = {c.x - a.x, c.y - a.y};
+  fix2 b_sub_a = {b.x - a.x, b.y - a.y};
 
-  return (fx_mult(c_sub_a.x, b_sub_a.y) - fx_mult(b_sub_a.x, c_sub_a.y));
+  fix32_t l = (fix32_t)(((int64_t)c_sub_a.x * b_sub_a.y) >> FIX_SHIFT);
+  fix32_t r = (fix32_t)(((int64_t)b_sub_a.x * c_sub_a.y) >> FIX_SHIFT);
+
+  return l - r;
 }
 
 mat4 mat4_mult(mat4 m1, mat4 m2) {
@@ -290,15 +288,6 @@ vec4 mat4_vec4_mult(mat4 m, vec4 v) {
 
   return (vec4){vec4_dot(row0, v), vec4_dot(row1, v), vec4_dot(row2, v),
                 vec4_dot(row3, v)};
-}
-
-mat4 mat4_scale(float factor) {
-  return (mat4){
-    {factor, 0, 0, 0},
-    {0, factor, 0, 0},
-    {0, 0, factor, 0},
-    {0, 0, 0, 1},
-  };
 }
 
 mat4 mat4_look_at(vec3 eye, vec3 target, vec3 up) {
@@ -339,22 +328,18 @@ void print_progress_bar(float progress, int length, const char *prefix) {
   fflush(stdout);
 }
 
-void calculate_normals_flat(size_t vertex_count, Vertex *vertices) {
-  for (size_t i = 0; i < vertex_count; i += 3) {
+void load_file(const char *file_path, long *file_size, char **file) {
+  FILE *fp = fopen(file_path, "rb");
 
-    vec3 p0 = vertices[i].position;
-    vec3 p1 = vertices[i + 1].position;
-    vec3 p2 = vertices[i + 2].position;
+  fseek(fp, 0L, SEEK_END);
+  *file_size = ftell(fp);
+  rewind(fp);
 
-    vec3 v1 = vec3_sub(p1, p0);
-    vec3 v2 = vec3_sub(p2, p0);
+  *file = malloc(*file_size + 1);
 
-    vec3 normal = vec3_norm(vec3_cross(v1, v2));
-
-    vertices[i].normal = normal;
-    vertices[i + 1].normal = normal;
-    vertices[i + 2].normal = normal;
-  }
+  size_t n = fread(*file, sizeof((*file)[0]), *file_size, fp);
+  (*file)[n] = '\0';
+  fclose(fp);
 }
 
 char *obj_parse_indices(char *p, int32_t *v_idx, int32_t *vt_idx,
@@ -374,20 +359,6 @@ char *obj_parse_indices(char *p, int32_t *v_idx, int32_t *vt_idx,
   return p;
 }
 
-void load_file(const char *file_path, long *file_size, char **file) {
-  FILE *fp = fopen(file_path, "rb");
-
-  fseek(fp, 0L, SEEK_END);
-  *file_size = ftell(fp);
-  rewind(fp);
-
-  *file = malloc(*file_size + 1);
-
-  size_t n = fread(*file, sizeof((*file)[0]), *file_size, fp);
-  (*file)[n] = '\0';
-  fclose(fp);
-}
-
 int parse_obj_str(long file_size, char *file, size_t *vertex_count,
                   Vertex **vertices) {
   char *start = file;
@@ -401,7 +372,6 @@ int parse_obj_str(long file_size, char *file, size_t *vertex_count,
 
   char *p = start;
   char *end = start + flen;
-  size_t last_print = 0;
   while (p < end) {
     size_t i = p - start;
     if ((i * 3) % 10000 == 0) {
@@ -456,8 +426,23 @@ int parse_obj_str(long file_size, char *file, size_t *vertex_count,
   }
   print_progress_bar(1, 30, "loading model: ");
 
+  // calculate normals if the model doesn't include them already
   if (vns.size == 0) {
-    calculate_normals_flat(mesh_verts.size, mesh_verts.items);
+    for (size_t i = 0; i < mesh_verts.size; i += 3) {
+
+      vec3 p0 = mesh_verts.items[i].position;
+      vec3 p1 = mesh_verts.items[i + 1].position;
+      vec3 p2 = mesh_verts.items[i + 2].position;
+
+      vec3 v1 = vec3_sub(p1, p0);
+      vec3 v2 = vec3_sub(p2, p0);
+
+      vec3 normal = vec3_norm(vec3_cross(v1, v2));
+
+      mesh_verts.items[i].normal = normal;
+      mesh_verts.items[i + 1].normal = normal;
+      mesh_verts.items[i + 2].normal = normal;
+    }
   }
 
   DARRAY_FREE(vs);
@@ -472,27 +457,8 @@ int parse_obj_str(long file_size, char *file, size_t *vertex_count,
   return 0;
 }
 
-float get_max_dist(uint32_t vertex_count, const Vertex *vertices) {
-  float max_dist_sq = 0;
-  for (uint32_t i = 0; i < vertex_count; i++) {
-    vec3 p = vertices[i].position;
-    float dist_sq = vec3_dot(p, p);
-    max_dist_sq = (dist_sq > max_dist_sq) ? dist_sq : max_dist_sq;
-  }
-  return sqrtf(max_dist_sq);
-}
-
-void set_pixel(uint32_t *color_buffer, size_t index, float r, float g,
-               float b) {
-  uint8_t rn = fminf(fmaxf(r, 0.0f), 1.0f) * 255;
-  uint8_t gn = fminf(fmaxf(g, 0.0f), 1.0f) * 255;
-  uint8_t bn = fminf(fmaxf(b, 0.0f), 1.0f) * 255;
-
-  color_buffer[index] = (0xFF << 24) | (rn << 16) | (gn << 8) | bn;
-}
-
 int fill_rule_bias(fix2 p0, fix2 p1) {
-  fix2 delta = fxvec2_sub(p1, p0);
+  fix2 delta = {p1.x - p0.x, p1.y - p0.y};
 
   bool is_top = (delta.y == 0) && (delta.x > 0);
   bool is_left = delta.y < 0;
@@ -500,29 +466,16 @@ int fill_rule_bias(fix2 p0, fix2 p1) {
   return (is_top || is_left) ? 0 : -1;
 }
 
-bool is_in_view(vec4 clip_pos) {
-  bool x_in_view = clip_pos.x >= -clip_pos.w && clip_pos.x <= clip_pos.w;
-  bool y_in_view = clip_pos.y >= -clip_pos.w && clip_pos.y <= clip_pos.w;
-  bool z_in_view = clip_pos.z >= -clip_pos.w && clip_pos.z <= clip_pos.w;
-
-  return x_in_view && y_in_view && z_in_view;
-}
-
-float barycentric_lerp(vec3 v, vec3 w) {
-  float w_sum = w.x + w.y + w.z;
-  return (v.x * w.y + v.y * w.z + v.z * w.x) / w_sum;
-}
-
 void render(const uint32_t vertex_count, const Vertex *vertices,
             uint32_t *color_buffer, float *depth_buffer, const uint32_t width,
             const uint32_t height, mat4 view_matrix) {
 
   for (size_t i = 0; i < width * height; i++) {
-    set_pixel(color_buffer, i, 0, 0, 0);
+    color_buffer[i] = 0xFF000000;
     depth_buffer[i] = 1.0f;
   }
 
-  mat4 model_mat = mat4_scale(1.0f);
+  mat4 model_mat = {{1, 0, 0, 0}, {0, 1, 0, 0}, {0, 0, 1, 0}, {0, 0, 0, 1}};
 
   mat4 projection_mat =
     mat4_perspective((float)width / height, 3.1415f / 4, 0.1f, 400.0f);
@@ -543,7 +496,11 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
     for (int j = 0; j < 3; j++) {
       vec3 pos = vertices[i + j].position;
       vec4 clip_pos = mat4_vec4_mult(transform, (vec4){pos.x, pos.y, pos.z, 1});
-      if (!is_in_view(clip_pos)) clip_count++;
+
+      bool in_view_x = clip_pos.x >= -clip_pos.w && clip_pos.x <= clip_pos.w;
+      bool in_view_y = clip_pos.y >= -clip_pos.w && clip_pos.y <= clip_pos.w;
+      bool in_view_z = clip_pos.z >= -clip_pos.w && clip_pos.z <= clip_pos.w;
+      if (!in_view_x || !in_view_y || !in_view_z) clip_count++;
 
       vec3 n = vertices[i + j].normal;
       vec4 wn = mat4_vec4_mult(model_mat, (vec4){n.x, n.y, n.z, 0});
@@ -582,10 +539,17 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
 
         if (a0 < 0 || a1 < 0 || a2 < 0) continue;
 
-        vec3 weights = {fx_to_float(a0), fx_to_float(a1), fx_to_float(a2)};
+        // normalized barycentric weights
+        vec3 w = {
+          (a0 >> FIX_SHIFT) + (float)(a0 & FIX_MASK) / (1 << FIX_SHIFT),
+          (a1 >> FIX_SHIFT) + (float)(a1 & FIX_MASK) / (1 << FIX_SHIFT),
+          (a2 >> FIX_SHIFT) + (float)(a2 & FIX_MASK) / (1 << FIX_SHIFT),
+        };
+        float w_sum = w.x + w.y + w.z;
 
-        float depth = barycentric_lerp(
-          (vec3){scr_pos[0].z, scr_pos[1].z, scr_pos[2].z}, weights);
+        float depth =
+          (scr_pos[0].z * w.y + scr_pos[1].z * w.z + scr_pos[2].z * w.x) /
+          w_sum;
 
         int idx = x + y * width;
         if (depth >= depth_buffer[idx]) continue;
@@ -596,15 +560,20 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
         vec3 nz = (vec3){normals[0].z, normals[1].z, normals[2].z};
 
         vec3 normal = {
-          barycentric_lerp(nx, weights),
-          barycentric_lerp(ny, weights),
-          barycentric_lerp(nz, weights),
+          (nx.x * w.y + nx.y * w.z + nx.z * w.x) / w_sum,
+          (ny.x * w.y + ny.y * w.z + ny.z * w.x) / w_sum,
+          (nz.x * w.y + nz.y * w.z + nz.z * w.x) / w_sum,
         };
 
+        // diffuse lighting
         float ambient = 0.1;
         float light = MAX(vec3_dot(normal, sun_direction), 0) + ambient;
 
-        set_pixel(color_buffer, idx, light, light, light);
+        uint8_t r = fminf(fmaxf(light, 0.0f), 1.0f) * 255;
+        uint8_t g = fminf(fmaxf(light, 0.0f), 1.0f) * 255;
+        uint8_t b = fminf(fmaxf(light, 0.0f), 1.0f) * 255;
+
+        color_buffer[idx] = (0xFF << 24) | (r << 16) | (g << 8) | b;
       }
     }
   }
@@ -658,7 +627,9 @@ int write_bmp_image(const char *file_name, int32_t width, int32_t height,
   return 0;
 }
 
-/* TEAPOT MODEL DATA ======================================================== */
+/*############################################################################*/
+/* TEAPOT MODEL DATA                                                          */
+/*############################################################################*/
 // Original model data from https://graphics.cs.utah.edu/teapot/
 const char *TEAPOT_OBJ =
   "v 6.1 0.96 0\nv 5.9 1.1 0.23\nv 5.8 1.2 0\nv 6.4 1.4 0\nv 6.3 1.4 0.23\nv "

@@ -1,20 +1,38 @@
-/*
- * Single File Software Renderer
+/* =============================================================================
+ * Single-File C99 Software Renderer
+ * =============================================================================
  *
- * This is a very basic software renderer that can load and render obj files.
+ * ABOUT:
  *
- * How to build and run:
+ *   This is a very basic software renderer that can load and render arbitrary
+ *   .obj files. The goal of this project was to keep things minimal, so only
+ *   standard C libraries are used; there are no third-party dependencies.
  *
- * This program uses only C99 features and standard c librarys, so any c
- * compiler should work.
+ *   If no .obj file is provided, the program renders a low-resolution version
+ *   of the Utah Teapot using embedded .obj data included at the end of this
+ *   file. (https://graphics.cs.utah.edu/teapot/)
  *
- * clang main.c OR gcc main.c OR cl main.c
  *
- * FEATURES:
+ * BUILDING:
  *
- * - Renders a single 3D model shaded using diffuse lighting.
- * - Can load and render any (well formed!) obj file.
- * - If no model is specified, renders a version of the Utah Teapot.
+ *   Since this program only uses standard C libraries, it should compile on
+ *   any system with a C compiler that supports C99.
+ *
+ *   Linux/macOS (clang or gcc):
+ *     clang -std=c99 main.c -lm
+ *
+ *   Windows:
+ *     cl main.c
+ *
+ *
+ * USAGE:
+ *
+ *   Run the program with no command line arguments to render the Utah Teapot.
+ *   To render a .obj file, provide the path as a command line argument.
+ *
+ *   Example:
+ *     ./a.out /path/to/your_file.obj
+ *
  */
 
 #include <errno.h>
@@ -25,16 +43,16 @@
 #include <stdlib.h>
 #include <string.h>
 
-/*############################################################################*/
-/* MACROS                                                                     */
-/*############################################################################*/
+/* MACROS ------------------------------------------------------------------- */
 #define MIN(a, b) (((a) < (b)) ? (a) : (b))
 #define MAX(a, b) (((a) > (b)) ? (a) : (b))
 
+// helpers for fixed point math
 #define FIX_SHIFT 16
 #define FIX_HALF ((1 << FIX_SHIFT) >> 1)
 #define FIX_MASK ((1 << FIX_SHIFT) - 1)
 
+// helpers for dynamic arrays
 #define DARRAY_DEFINE(type, name)                                              \
   typedef struct {                                                             \
     size_t capacity;                                                           \
@@ -61,11 +79,8 @@
     free(array.items);                                                         \
   } while (0);
 
-/*############################################################################*/
-/* GLOBALS                                                                    */
-/*############################################################################*/
-// See the end of this file for teapot model data
-const char *TEAPOT_OBJ;
+/* CONSTANTS ---------------------------------------------------------------- */
+const char *TEAPOT_OBJ; // See the end of this file for teapot model data
 
 static const uint32_t WIDTH = 1920;
 static const uint32_t HEIGHT = 1080;
@@ -73,9 +88,7 @@ static const float FOV_Y = 3.1415f / 4;
 
 static const char *OUPUT_FILE_NAME = "out.bmp";
 
-/*############################################################################*/
-/* TYPE DEFINITIONS                                                           */
-/*############################################################################*/
+/* TYPEDEFS ----------------------------------------------------------------- */
 // clang-format off
 typedef int32_t fix32_t;
 
@@ -86,6 +99,7 @@ typedef struct { float x, y, z; } vec3;
 typedef struct { float x, y, z, w; } vec4;
 typedef struct { vec4 col0, col1, col2, col3; } mat4;
 // clang-format on
+
 typedef struct {
   vec3 position;
   float p0;
@@ -99,136 +113,45 @@ DARRAY_DEFINE(vec2, vec2_da);
 DARRAY_DEFINE(vec3, vec3_da);
 DARRAY_DEFINE(Vertex, Vertex_da);
 
-/*############################################################################*/
-/* FUNCTION DECLARATIONS                                                      */
-/*############################################################################*/
-vec3 vec3_sub(vec3 v1, vec3 v2);
-float vec3_dot(vec3 v1, vec3 v2);
-float vec4_dot(vec4 v1, vec4 v2);
-vec3 vec3_cross(vec3 v1, vec3 v2);
-vec3 vec3_norm(vec3 v);
-
-fix2 fxvec2_create(float x, float y);
-fix32_t fx_signed_area(fix2 a, fix2 b, fix2 c);
-
-mat4 mat4_mult(mat4 m1, mat4 m2);
-vec4 mat4_vec4_mult(mat4 m, vec4 v);
-
-mat4 mat4_look_at(vec3 eye, vec3 target, vec3 up);
-mat4 mat4_perspective(float aspect, float fov, float near, float far);
-
-void print_progress_bar(float progress, int length, const char *prefix);
-
-void load_file(const char *file_path, long *file_size, char **file);
-char *obj_parse_indices(char *p, int32_t *v_idx, int32_t *vt_idx,
-                        int32_t *vn_idx);
-int parse_obj_str(long file_size, char *file, size_t *vertex_count,
-                  Vertex **vertices);
-
-int fill_rule_bias(fix2 p0, fix2 p1);
-void render(const uint32_t vertex_count, const Vertex *vertices,
-            uint32_t *color_buffer, float *depth_buffer, const uint32_t width,
-            const uint32_t height, mat4 view_matrix);
-
-void write_uint32_t_le(uint8_t *buffer, uint32_t data);
-int write_bmp_image(const char *file_name, int32_t width, int32_t height,
-                    const uint32_t *pixels);
-
-/*############################################################################*/
-/* MAIN                                                                       */
-/*############################################################################*/
-int main(int argc, char **argv) {
-  size_t vertex_count;
-  Vertex *vertices;
-
-  if (argc == 1) {
-    parse_obj_str(strlen(TEAPOT_OBJ), (char *)TEAPOT_OBJ, &vertex_count,
-                  &vertices);
-  } else if (argc == 2) {
-    char *fp;
-    long flen;
-    load_file(argv[1], &flen, &fp);
-    parse_obj_str(flen, fp, &vertex_count, &vertices);
-  } else {
-    fprintf(stderr, "Error: Invalid command line arguments");
-    return EXIT_FAILURE;
+/* UTILITY FUNCTIONS -------------------------------------------------------- */
+void print_progress_bar(float progress, int length, const char *prefix) {
+  if (progress >= 1) {
+    printf("\r%sdone%*s\n", prefix, length, "");
+    return;
   }
 
-  // center model at origin
-  vec3 avg_position = {0};
-  for (size_t i = 0; i < vertex_count; i++) {
-    avg_position.x += vertices[i].position.x;
-    avg_position.y += vertices[i].position.y;
-    avg_position.z += vertices[i].position.z;
+  printf("\r%s[", prefix);
+  for (int i = 0; i < length; i++) {
+    putchar(i < (int)(progress * length) ? '#' : ' ');
   }
-  avg_position.x /= (float)vertex_count;
-  avg_position.y /= (float)vertex_count;
-  avg_position.z /= (float)vertex_count;
-
-  for (size_t i = 0; i < vertex_count; i++) {
-    vertices[i].position = vec3_sub(vertices[i].position, avg_position);
-  }
-
-  // ensure that model is fully visible
-  float max_dist = 0;
-  for (uint32_t i = 0; i < vertex_count; i++) {
-    vec3 p = vertices[i].position;
-    float dist_sq = vec3_dot(p, p);
-    max_dist = (dist_sq > max_dist) ? dist_sq : max_dist;
-  }
-  max_dist = sqrtf(max_dist) * 1.1f;
-  float min_fov = (WIDTH >= HEIGHT) ? FOV_Y : (FOV_Y * (float)WIDTH / HEIGHT);
-  float camera_dist = fabsf(max_dist / sinf(min_fov * 0.5f));
-
-  mat4 view_matrix =
-    mat4_look_at((vec3){0, 0, camera_dist}, (vec3){0, 0, 0}, (vec3){0, -1, 0});
-
-  uint32_t *color_buffer = calloc(WIDTH * HEIGHT, sizeof(*color_buffer));
-  if (color_buffer == NULL) {
-    free(vertices);
-    perror("Error allocating color buffer: ");
-    return EXIT_FAILURE;
-  }
-
-  float *depth_buffer = malloc(WIDTH * HEIGHT * sizeof(*depth_buffer));
-  if (depth_buffer == NULL) {
-    free(vertices);
-    free(color_buffer);
-    perror("Error allocating depth buffer: ");
-    return EXIT_FAILURE;
-  }
-
-  render(vertex_count, vertices, color_buffer, depth_buffer, WIDTH, HEIGHT,
-         view_matrix);
-
-  if (write_bmp_image(OUPUT_FILE_NAME, WIDTH, HEIGHT, color_buffer) != 0) {
-    perror("Error writing output image: ");
-    free(vertices);
-    free(color_buffer);
-    free(depth_buffer);
-    return EXIT_FAILURE;
-  }
-
-  free(vertices);
-  free(color_buffer);
-  free(depth_buffer);
-
-  return EXIT_SUCCESS;
+  printf("]");
+  fflush(stdout);
 }
 
-/*############################################################################*/
-/* FUNCTION IMPLEMENTATIONS                                                   */
-/*############################################################################*/
+/* VECTOR/MATRIX MATH FUNCTIONS --------------------------------------------- */
+fix2 fix2_create(float x, float y) {
+  return (fix2){roundf(x * (1 << FIX_SHIFT)), roundf(y * (1 << FIX_SHIFT))};
+}
+
+fix32_t fix_signed_area(fix2 a, fix2 b, fix2 c) {
+  // note this function actually returns twice the signed area, but in this
+  // program we only care about the sign, not the actual value, so dividing
+  // by two is unnecessary.
+  fix2 c_sub_a = {c.x - a.x, c.y - a.y};
+  fix2 b_sub_a = {b.x - a.x, b.y - a.y};
+
+  fix32_t l = (fix32_t)(((int64_t)c_sub_a.x * b_sub_a.y) >> FIX_SHIFT);
+  fix32_t r = (fix32_t)(((int64_t)b_sub_a.x * c_sub_a.y) >> FIX_SHIFT);
+
+  return l - r;
+}
+
 vec3 vec3_sub(vec3 v1, vec3 v2) {
   return (vec3){v1.x - v2.x, v1.y - v2.y, v1.z - v2.z};
 }
 
 float vec3_dot(vec3 v1, vec3 v2) {
   return v1.x * v2.x + v1.y * v2.y + v1.z * v2.z;
-}
-
-float vec4_dot(vec4 v1, vec4 v2) {
-  return v1.x * v2.x + v1.y * v2.y + v1.z * v2.z + v1.w * v2.w;
 }
 
 vec3 vec3_cross(vec3 v1, vec3 v2) {
@@ -248,18 +171,8 @@ vec3 vec3_norm(vec3 v) {
   };
 }
 
-fix2 fxvec2_create(float x, float y) {
-  return (fix2){roundf(x * (1 << FIX_SHIFT)), roundf(y * (1 << FIX_SHIFT))};
-}
-
-fix32_t fx_signed_area(fix2 a, fix2 b, fix2 c) {
-  fix2 c_sub_a = {c.x - a.x, c.y - a.y};
-  fix2 b_sub_a = {b.x - a.x, b.y - a.y};
-
-  fix32_t l = (fix32_t)(((int64_t)c_sub_a.x * b_sub_a.y) >> FIX_SHIFT);
-  fix32_t r = (fix32_t)(((int64_t)b_sub_a.x * c_sub_a.y) >> FIX_SHIFT);
-
-  return l - r;
+float vec4_dot(vec4 v1, vec4 v2) {
+  return v1.x * v2.x + v1.y * v2.y + v1.z * v2.z + v1.w * v2.w;
 }
 
 mat4 mat4_mult(mat4 m1, mat4 m2) {
@@ -314,20 +227,7 @@ mat4 mat4_perspective(float aspect, float fov, float near, float far) {
   };
 }
 
-void print_progress_bar(float progress, int length, const char *prefix) {
-  if (progress >= 1) {
-    printf("\r%sdone%*s\n", prefix, length, "");
-    return;
-  }
-
-  printf("\r%s[", prefix);
-  for (int i = 0; i < length; i++) {
-    putchar(i < (int)(progress * length) ? '#' : ' ');
-  }
-  printf("]");
-  fflush(stdout);
-}
-
+/* FILE LOADING AND PARSING FUNCTIONS --------------------------------------- */
 void load_file(const char *file_path, long *file_size, char **file) {
   FILE *fp = fopen(file_path, "rb");
 
@@ -457,11 +357,12 @@ int parse_obj_str(long file_size, char *file, size_t *vertex_count,
   return 0;
 }
 
+/* RENDERING FUNCTIONS ------------------------------------------------------ */
 int fill_rule_bias(fix2 p0, fix2 p1) {
   fix2 delta = {p1.x - p0.x, p1.y - p0.y};
 
-  bool is_top = (delta.y == 0) && (delta.x > 0);
-  bool is_left = delta.y < 0;
+  bool is_top = (delta.y == 0) && (delta.x < 0);
+  bool is_left = delta.y > 0;
 
   return (is_top || is_left) ? 0 : -1;
 }
@@ -514,11 +415,11 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
     }
     if (clip_count == 3) continue; // triangle completely out of view
 
-    fix2 p0 = fxvec2_create(scr_pos[0].x * width, scr_pos[0].y * height);
-    fix2 p1 = fxvec2_create(scr_pos[1].x * width, scr_pos[1].y * height);
-    fix2 p2 = fxvec2_create(scr_pos[2].x * width, scr_pos[2].y * height);
+    fix2 p0 = fix2_create(scr_pos[0].x * width, scr_pos[0].y * height);
+    fix2 p1 = fix2_create(scr_pos[1].x * width, scr_pos[1].y * height);
+    fix2 p2 = fix2_create(scr_pos[2].x * width, scr_pos[2].y * height);
 
-    if (fx_signed_area(p0, p1, p2) <= 0) continue;
+    if (fix_signed_area(p0, p1, p2) <= 0) continue;
 
     int xmin = MAX(0, MIN(MIN(p0.x, p1.x), p2.x) >> FIX_SHIFT);
     int ymin = MAX(0, MIN(MIN(p0.y, p1.y), p2.y) >> FIX_SHIFT);
@@ -533,9 +434,9 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
       for (int x = xmin; x <= xmax; x++) {
         fix2 p = {(x << FIX_SHIFT) + FIX_HALF, (y << FIX_SHIFT) + FIX_HALF};
 
-        fix32_t a0 = fx_signed_area(p0, p1, p) + b0;
-        fix32_t a1 = fx_signed_area(p1, p2, p) + b1;
-        fix32_t a2 = fx_signed_area(p2, p0, p) + b2;
+        fix32_t a0 = fix_signed_area(p0, p1, p) + b0;
+        fix32_t a1 = fix_signed_area(p1, p2, p) + b1;
+        fix32_t a2 = fix_signed_area(p2, p0, p) + b2;
 
         if (a0 < 0 || a1 < 0 || a2 < 0) continue;
 
@@ -580,6 +481,7 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
   print_progress_bar(1, 30, "    rendering: ");
 }
 
+/* FILE WRITING FUNCTIONS --------------------------------------------------- */
 void write_uint32_t_le(uint8_t *buffer, uint32_t data) {
   buffer[0] = data & 0xff;
   buffer[1] = (data >> 8) & 0xff;
@@ -627,9 +529,84 @@ int write_bmp_image(const char *file_name, int32_t width, int32_t height,
   return 0;
 }
 
-/*############################################################################*/
-/* TEAPOT MODEL DATA                                                          */
-/*############################################################################*/
+/* MAIN --------------------------------------------------------------------- */
+int main(int argc, char **argv) {
+  size_t vertex_count;
+  Vertex *vertices;
+
+  if (argc > 2) {
+    fprintf(stderr, "Error: Invalid command line arguments");
+    return EXIT_FAILURE;
+  }
+
+  if (argc == 1) {
+    parse_obj_str(strlen(TEAPOT_OBJ), (char *)TEAPOT_OBJ, &vertex_count,
+                  &vertices);
+
+    // TODO: mirror vertices
+  } else if (argc == 2) {
+    char *fp;
+    long flen;
+    load_file(argv[1], &flen, &fp);
+    parse_obj_str(flen, fp, &vertex_count, &vertices);
+  }
+
+  // center model at origin
+  vec3 avg_position = {0};
+  for (size_t i = 0; i < vertex_count; i++) {
+    avg_position.x += vertices[i].position.x;
+    avg_position.y += vertices[i].position.y;
+    avg_position.z += vertices[i].position.z;
+  }
+  avg_position.x /= (float)vertex_count;
+  avg_position.y /= (float)vertex_count;
+  avg_position.z /= (float)vertex_count;
+
+  for (size_t i = 0; i < vertex_count; i++) {
+    vertices[i].position = vec3_sub(vertices[i].position, avg_position);
+  }
+
+  // position camera so that model is fully visible
+  float max_dist = 0;
+  for (uint32_t i = 0; i < vertex_count; i++) {
+    vec3 p = vertices[i].position;
+    float dist_sq = vec3_dot(p, p);
+    max_dist = (dist_sq > max_dist) ? dist_sq : max_dist;
+  }
+  max_dist = sqrtf(max_dist) * 1.1f;
+  float min_fov = (WIDTH >= HEIGHT) ? FOV_Y : (FOV_Y * (float)WIDTH / HEIGHT);
+  float camera_dist = fabsf(max_dist / sinf(min_fov * 0.5f));
+
+  vec3 camera_pos = vec3_norm((vec3){1, -1, 2});
+  camera_pos.x *= camera_dist;
+  camera_pos.y *= camera_dist;
+  camera_pos.z *= camera_dist;
+
+  mat4 view_matrix =
+    mat4_look_at(camera_pos, (vec3){0, 0, 0}, (vec3){0, -1, 0});
+
+  uint32_t *color_buffer = calloc(WIDTH * HEIGHT, sizeof(*color_buffer));
+  float *depth_buffer = malloc(WIDTH * HEIGHT * sizeof(*depth_buffer));
+
+  render(vertex_count, vertices, color_buffer, depth_buffer, WIDTH, HEIGHT,
+         view_matrix);
+
+  if (write_bmp_image(OUPUT_FILE_NAME, WIDTH, HEIGHT, color_buffer) != 0) {
+    perror("Error writing output image: ");
+    free(vertices);
+    free(color_buffer);
+    free(depth_buffer);
+    return EXIT_FAILURE;
+  }
+
+  free(vertices);
+  free(color_buffer);
+  free(depth_buffer);
+
+  return EXIT_SUCCESS;
+}
+
+/* TEAPOT MODEL DATA -------------------------------------------------------- */
 // Original model data from https://graphics.cs.utah.edu/teapot/
 const char *TEAPOT_OBJ =
   "v 6.1 0.96 0\nv 5.9 1.1 0.23\nv 5.8 1.2 0\nv 6.4 1.4 0\nv 6.3 1.4 0.23\nv "

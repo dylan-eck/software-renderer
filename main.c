@@ -35,6 +35,7 @@
  *
  */
 
+/* INCLUDES ----------------------------------------------------------------- */
 #include <errno.h>
 #include <math.h>
 #include <stdbool.h>
@@ -67,7 +68,7 @@
       else                                                                     \
         array.capacity *= 2;                                                   \
       array.items =                                                            \
-        realloc(array.items, array.capacity * sizeof(*array.items));           \
+        xrealloc(array.items, array.capacity * sizeof(*array.items));          \
     }                                                                          \
     array.items[array.size++] = item;                                          \
   } while (0)
@@ -94,7 +95,6 @@ typedef int32_t fix32_t;
 
 typedef struct { float x, y; } vec2;
 typedef struct { fix32_t x, y; } fix2;
-
 typedef struct { float x, y, z; } vec3;
 typedef struct { float x, y, z, w; } vec4;
 typedef struct { vec4 col0, col1, col2, col3; } mat4;
@@ -114,6 +114,24 @@ DARRAY_DEFINE(vec3, vec3_da);
 DARRAY_DEFINE(Vertex, Vertex_da);
 
 /* UTILITY FUNCTIONS -------------------------------------------------------- */
+void *xmalloc(size_t size) {
+  void *tmp = malloc(size);
+  if (tmp == NULL) {
+    printf("Error: Memory allocation failed\n");
+    exit(EXIT_FAILURE);
+  }
+  return tmp;
+}
+
+void *xrealloc(void *ptr, size_t size) {
+  void *tmp = realloc(ptr, size);
+  if (tmp == NULL) {
+    printf("Error: Memory allocation failed\n");
+    exit(EXIT_FAILURE);
+  }
+  return tmp;
+}
+
 void print_progress_bar(float progress, int length, const char *prefix) {
   if (progress >= 1) {
     printf("\r%sdone%*s\n", prefix, length, "");
@@ -235,7 +253,7 @@ void load_file(const char *file_path, long *file_size, char **file) {
   *file_size = ftell(fp);
   rewind(fp);
 
-  *file = malloc(*file_size + 1);
+  *file = xmalloc(*file_size + 1);
 
   size_t n = fread(*file, sizeof((*file)[0]), *file_size, fp);
   (*file)[n] = '\0';
@@ -544,7 +562,7 @@ int main(int argc, char **argv) {
                   &vertices);
 
     // TODO: mirror vertices
-  } else if (argc == 2) {
+  } else {
     char *fp;
     long flen;
     load_file(argv[1], &flen, &fp);
@@ -585,8 +603,8 @@ int main(int argc, char **argv) {
   mat4 view_matrix =
     mat4_look_at(camera_pos, (vec3){0, 0, 0}, (vec3){0, -1, 0});
 
-  uint32_t *color_buffer = calloc(WIDTH * HEIGHT, sizeof(*color_buffer));
-  float *depth_buffer = malloc(WIDTH * HEIGHT * sizeof(*depth_buffer));
+  uint32_t *color_buffer = xmalloc(WIDTH * HEIGHT * sizeof(*color_buffer));
+  float *depth_buffer = xmalloc(WIDTH * HEIGHT * sizeof(*depth_buffer));
 
   render(vertex_count, vertices, color_buffer, depth_buffer, WIDTH, HEIGHT,
          view_matrix);

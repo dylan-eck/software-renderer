@@ -2,11 +2,12 @@
  * Single-File C99 Software Renderer
  * =============================================================================
  *
- * ABOUT:
+ *   A minimal, dependency-free software 3D renderer written in standard C99.
  *
- *   This is a very basic software renderer that can load and render arbitrary
- *   .obj files. The goal of this project was to keep things minimal, so only
- *   standard C libraries are used; there are no third-party dependencies.
+ *   This program can load and render arbitrary Wavefront (.obj) files using a
+ *   simple CPU-based rasterizer. The goal of this project was to keep things
+ *   minimal, so only standard C libraries are used; there are no third-party
+ *   dependencies.
  *
  *   If no .obj file is provided, the program renders a low-resolution version
  *   of the Utah Teapot using embedded .obj data included at the end of this
@@ -14,25 +15,54 @@
  *
  *
  * BUILDING:
+ * -----------------------------------------------------------------------------
  *
- *   Since this program only uses standard C libraries, it should compile on
- *   any system with a C compiler that supports C99.
+ *   Any C compiler with C99 support should work.
  *
- *   Linux/macOS (clang or gcc):
+ *   Linux / macOS:
  *     clang -std=c99 main.c -lm
+ *     gcc -std=c99 main.c -lm
  *
  *   Windows:
  *     cl main.c
+ *     clang -std=c99 main.c
  *
  *
  * USAGE:
+ * -----------------------------------------------------------------------------
  *
- *   Run the program with no command line arguments to render the Utah Teapot.
- *   To render a .obj file, provide the path as a command line argument.
+ *   Render embedded teapot:
+ *     ./a.out
  *
- *   Example:
- *     ./a.out /path/to/your_file.obj
+ *   Render external .obj:
+ *     ./a.out path/to/model.obj
  *
+ *   To change output width/height, field of view, clipping planes, and output
+ *   file name, see the CONSTANTS section of this file.
+ *
+ *   To change the camera position and sun direction see lines XXX and YYY of
+ *   this file.
+ *
+ *
+ * NOTE ON DESIGN TRADEOFFS
+ * -----------------------------------------------------------------------------
+ *
+ *   This project was intentionally constrained to a single source file with
+ *   no dependencies other the the C standard library. Due to these
+ *   restrictions, certain design decision prioritize minimalism over
+ *   robustness and extensibility.
+ *
+ *   For example:
+ *     - Error handling is intentionally minimal
+ *     - Abstractions are introduced only when reused or logic is complex
+ *     - Only the operations required by the renderer are implemented
+ *
+ *   In a production environment, this code would likely be refactored into
+ *   multiple translation units with stronger validation, clearer module
+ *   boundaries, and more complete math utilities.
+ *
+ *   These trade-offs are deliberate and aligned with the project's goals.
+ * -----------------------------------------------------------------------------
  */
 
 /* INCLUDES ----------------------------------------------------------------- */
@@ -83,9 +113,11 @@
 /* CONSTANTS ---------------------------------------------------------------- */
 const char *TEAPOT_OBJ; // See the end of this file for teapot model data
 
-static const uint32_t WIDTH = 1920;
-static const uint32_t HEIGHT = 1080;
+static const uint32_t WIDTH = 800;
+static const uint32_t HEIGHT = 800;
 static const float FOV_Y = 3.1415f / 4;
+static const float NEAR_CLIP = 0.1;
+static const float FAR_CLIP = 400.0;
 
 static const char *OUPUT_FILE_NAME = "out.bmp";
 
@@ -102,12 +134,20 @@ typedef struct { vec4 col0, col1, col2, col3; } mat4;
 
 typedef struct {
   vec3 position;
-  float p0;
+  float _pad0;
   vec3 normal;
-  float p1;
+  float _pad1;
   vec4 color;
   vec2 uv;
 } Vertex;
+
+typedef struct {
+  mat4 model_mat;
+  mat4 view_mat;
+  mat4 projection_mat;
+  vec3 sun_dir;
+  float fov_y;
+} RenderParams;
 
 DARRAY_DEFINE(vec2, vec2_da);
 DARRAY_DEFINE(vec3, vec3_da);
@@ -388,21 +428,16 @@ int fix_fill_rule_bias(fix2 p0, fix2 p1) {
 
 void render(const uint32_t vertex_count, const Vertex *vertices,
             uint32_t *color_buffer, float *depth_buffer, const uint32_t width,
-            const uint32_t height, mat4 view_matrix) {
+            const uint32_t height, RenderParams params) {
 
+  // clear buffers
   for (size_t i = 0; i < width * height; i++) {
     color_buffer[i] = 0xFF000000;
     depth_buffer[i] = 1.0f;
   }
 
-  mat4 model_mat = {{1, 0, 0, 0}, {0, 1, 0, 0}, {0, 0, 1, 0}, {0, 0, 0, 1}};
-
-  mat4 projection_mat =
-    mat4_perspective((float)width / height, 3.1415f / 4, 0.1f, 400.0f);
-
-  mat4 transform = mat4_mult(mat4_mult(projection_mat, view_matrix), model_mat);
-
-  vec3 sun_direction = vec3_norm((vec3){.x = 0, .y = -1, .z = 0});
+  mat4 transform = mat4_mult(mat4_mult(params.projection_mat, params.view_mat),
+                             params.model_mat);
 
   for (size_t i = 0; i < vertex_count; i += 3) {
     if ((i * 3) % 10000 == 0) {
@@ -417,13 +452,17 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
       vec3 pos = vertices[i + j].position;
       vec4 clip_pos = mat4_vec4_mult(transform, (vec4){pos.x, pos.y, pos.z, 1});
 
+      // check if vertex is out of view
+      // if all three are out of view, we do not need to draw the triangle
       bool in_view_x = clip_pos.x >= -clip_pos.w && clip_pos.x <= clip_pos.w;
       bool in_view_y = clip_pos.y >= -clip_pos.w && clip_pos.y <= clip_pos.w;
       bool in_view_z = clip_pos.z >= -clip_pos.w && clip_pos.z <= clip_pos.w;
       if (!in_view_x || !in_view_y || !in_view_z) clip_count++;
 
       vec3 n = vertices[i + j].normal;
-      vec4 wn = mat4_vec4_mult(model_mat, (vec4){n.x, n.y, n.z, 0});
+      // note that this normal transformation is only correct under uniform
+      // scalling
+      vec4 wn = mat4_vec4_mult(params.model_mat, (vec4){n.x, n.y, n.z, 0});
       normals[j] = vec3_norm((vec3){wn.x, wn.y, wn.z});
 
       scr_pos[j] = (vec3){
@@ -489,7 +528,7 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
 
         // diffuse lighting
         float ambient = 0.1;
-        float light = MAX(vec3_dot(normal, sun_direction), 0) + ambient;
+        float light = MAX(vec3_dot(normal, params.sun_dir), 0) + ambient;
 
         uint8_t r = fminf(fmaxf(light, 0.0f), 1.0f) * 255;
         uint8_t g = fminf(fmaxf(light, 0.0f), 1.0f) * 255;
@@ -558,6 +597,7 @@ int main(int argc, char **argv) {
   Vertex *vertices;
 
   if (argc == 1) {
+    printf("no model specified, rendering embedded teapot model\n");
     parse_obj_str(strlen(TEAPOT_OBJ), (char *)TEAPOT_OBJ, &vertex_count,
                   &vertices);
 
@@ -570,12 +610,11 @@ int main(int argc, char **argv) {
       Vertex v2 = vertices[i + 2];
 
       v0.position.z *= -1;
-      v0.normal.z *= -1;
-
       v1.position.z *= -1;
-      v1.normal.z *= -1;
-
       v2.position.z *= -1;
+
+      v0.normal.z *= -1;
+      v1.normal.z *= -1;
       v2.normal.z *= -1;
 
       // mirroring flips winding order, so we need to swap two vertices
@@ -587,6 +626,7 @@ int main(int argc, char **argv) {
     vertex_count = 2 * vertex_count;
 
   } else {
+    printf("rendering model %s\n", argv[1]);
     char *fp;
     long flen;
     int res = load_file(argv[1], &flen, &fp);
@@ -625,18 +665,31 @@ int main(int argc, char **argv) {
   camera_pos.y *= camera_dist;
   camera_pos.z *= camera_dist;
 
-  mat4 view_matrix =
-    mat4_look_at(camera_pos, (vec3){0, 0, 0}, (vec3){0, -1, 0});
+  // create transformation matrices
+  mat4 model_mat = {{1, 0, 0, 0}, {0, 1, 0, 0}, {0, 0, 1, 0}, {0, 0, 0, 1}};
+
+  mat4 view_mat = mat4_look_at(camera_pos, (vec3){0, 0, 0}, (vec3){0, -1, 0});
+
+  mat4 projection_mat =
+    mat4_perspective((float)WIDTH / HEIGHT, FOV_Y, NEAR_CLIP, FAR_CLIP);
 
   // render and write image
   uint32_t *color_buffer = xmalloc(WIDTH * HEIGHT * sizeof(*color_buffer));
   float *depth_buffer = xmalloc(WIDTH * HEIGHT * sizeof(*depth_buffer));
 
+  RenderParams params = {
+    .model_mat = model_mat,
+    .view_mat = view_mat,
+    .projection_mat = projection_mat,
+    .sun_dir = vec3_norm((vec3){.x = 0, .y = -1, .z = 0}),
+  };
+
   render(vertex_count, vertices, color_buffer, depth_buffer, WIDTH, HEIGHT,
-         view_matrix);
+         params);
 
   int res = write_bmp_image(OUPUT_FILE_NAME, WIDTH, HEIGHT, color_buffer);
   if (res != 0) error_and_exit("Failed to write output image");
+  printf("wrote output image %s\n", OUPUT_FILE_NAME);
 
   free(vertices);
   free(color_buffer);

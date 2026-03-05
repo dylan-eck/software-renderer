@@ -36,7 +36,7 @@
  */
 
 /* INCLUDES ----------------------------------------------------------------- */
-#include <errno.h>
+#include <ctype.h>
 #include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -114,21 +114,20 @@ DARRAY_DEFINE(vec3, vec3_da);
 DARRAY_DEFINE(Vertex, Vertex_da);
 
 /* UTILITY FUNCTIONS -------------------------------------------------------- */
+void error_and_exit(const char *message) {
+  fprintf(stderr, "Error: %s\n", message);
+  exit(EXIT_FAILURE);
+}
+
 void *xmalloc(size_t size) {
   void *tmp = malloc(size);
-  if (tmp == NULL) {
-    printf("Error: Memory allocation failed\n");
-    exit(EXIT_FAILURE);
-  }
+  if (tmp == NULL) error_and_exit("Memory allocation failed");
   return tmp;
 }
 
 void *xrealloc(void *ptr, size_t size) {
   void *tmp = realloc(ptr, size);
-  if (tmp == NULL) {
-    printf("Error: Memory allocation failed\n");
-    exit(EXIT_FAILURE);
-  }
+  if (tmp == NULL) error_and_exit("Memory allocation failed");
   return tmp;
 }
 
@@ -153,8 +152,8 @@ fix2 fix2_create(float x, float y) {
 
 fix32_t fix_signed_area(fix2 a, fix2 b, fix2 c) {
   // note this function actually returns twice the signed area, but in this
-  // program we only care about the sign, not the actual value, so dividing
-  // by two is unnecessary.
+  // program the exact magnitude is not important, so there is no need to divide
+  // by two
   fix2 c_sub_a = {c.x - a.x, c.y - a.y};
   fix2 b_sub_a = {b.x - a.x, b.y - a.y};
 
@@ -217,21 +216,25 @@ vec4 mat4_vec4_mult(mat4 m, vec4 v) {
   vec4 row2 = {m.col0.z, m.col1.z, m.col2.z, m.col3.z};
   vec4 row3 = {m.col0.w, m.col1.w, m.col2.w, m.col3.w};
 
-  return (vec4){vec4_dot(row0, v), vec4_dot(row1, v), vec4_dot(row2, v),
-                vec4_dot(row3, v)};
+  return (vec4){
+    vec4_dot(row0, v),
+    vec4_dot(row1, v),
+    vec4_dot(row2, v),
+    vec4_dot(row3, v),
+  };
 }
 
-mat4 mat4_look_at(vec3 eye, vec3 target, vec3 up) {
-  vec3 f = vec3_norm(vec3_sub(target, eye));
-  vec3 s = vec3_norm(vec3_cross(f, up));
-  vec3 u = vec3_cross(f, s);
+mat4 mat4_look_at(vec3 pos, vec3 target, vec3 up) {
+  vec3 f = vec3_norm(vec3_sub(target, pos));
+  vec3 r = vec3_norm(vec3_cross(f, up));
+  vec3 u = vec3_cross(f, r);
 
   mat4 m;
-  m.col0 = (vec4){s.x, u.x, f.x, 0.0f};
-  m.col1 = (vec4){s.y, u.y, f.y, 0.0f};
-  m.col2 = (vec4){s.z, u.z, f.z, 0.0f};
+  m.col0 = (vec4){r.x, u.x, f.x, 0.0f};
+  m.col1 = (vec4){r.y, u.y, f.y, 0.0f};
+  m.col2 = (vec4){r.z, u.z, f.z, 0.0f};
   m.col3 =
-    (vec4){-vec3_dot(s, eye), -vec3_dot(u, eye), -vec3_dot(f, eye), 1.0f};
+    (vec4){-vec3_dot(r, pos), -vec3_dot(u, pos), -vec3_dot(f, pos), 1.0f};
 
   return m;
 }
@@ -246,8 +249,9 @@ mat4 mat4_perspective(float aspect, float fov, float near, float far) {
 }
 
 /* FILE LOADING AND PARSING FUNCTIONS --------------------------------------- */
-void load_file(const char *file_path, long *file_size, char **file) {
+int load_file(const char *file_path, long *file_size, char **file) {
   FILE *fp = fopen(file_path, "rb");
+  if (fp == NULL) return -1;
 
   fseek(fp, 0L, SEEK_END);
   *file_size = ftell(fp);
@@ -258,6 +262,8 @@ void load_file(const char *file_path, long *file_size, char **file) {
   size_t n = fread(*file, sizeof((*file)[0]), *file_size, fp);
   (*file)[n] = '\0';
   fclose(fp);
+
+  return 0;
 }
 
 char *obj_parse_indices(char *p, int32_t *v_idx, int32_t *vt_idx,
@@ -268,7 +274,7 @@ char *obj_parse_indices(char *p, int32_t *v_idx, int32_t *vt_idx,
   do {
     idxs[i++] = strtol(p, &p, 10);
     if (*p == '/') p++;
-  } while (*p != ' ' && *p != '\r' && *p != '\n' && *p != '\0');
+  } while (*p && !isspace((unsigned char)*p));
 
   *v_idx = idxs[0];
   *vt_idx = idxs[1];
@@ -277,26 +283,23 @@ char *obj_parse_indices(char *p, int32_t *v_idx, int32_t *vt_idx,
   return p;
 }
 
-int parse_obj_str(long file_size, char *file, size_t *vertex_count,
-                  Vertex **vertices) {
-  char *start = file;
-  long flen = file_size;
-
+void parse_obj_str(long file_size, char *file, size_t *vertex_count,
+                   Vertex **vertices) {
   vec3_da vs = {0};
   vec2_da vts = {0};
   vec3_da vns = {0};
   Vertex_da face_verts = {0};
   Vertex_da mesh_verts = {0};
 
-  char *p = start;
-  char *end = start + flen;
+  char *p = file;
+  char *end = file + file_size;
   while (p < end) {
-    size_t i = p - start;
+    size_t i = p - file;
     if ((i * 3) % 10000 == 0) {
-      print_progress_bar((float)i / flen, 30, "loading model: ");
+      print_progress_bar((float)i / file_size, 30, "loading model: ");
     }
 
-    if (p != start && *(p - 1) != '\n') {
+    if (p != file && *(p - 1) != '\n') {
       p++;
       continue;
     };
@@ -306,7 +309,7 @@ int parse_obj_str(long file_size, char *file, size_t *vertex_count,
 
       face_verts.size = 0;
 
-      while (*p != '\r' && *p != '\n' && *p != '\0') {
+      while (*p && *p != '\n') {
         int32_t v, vt, vn;
         p = obj_parse_indices(p, &v, &vt, &vn);
 
@@ -371,12 +374,10 @@ int parse_obj_str(long file_size, char *file, size_t *vertex_count,
   *vertex_count = mesh_verts.size;
 
   DARRAY_FREE(face_verts);
-
-  return 0;
 }
 
 /* RENDERING FUNCTIONS ------------------------------------------------------ */
-int fill_rule_bias(fix2 p0, fix2 p1) {
+int fix_fill_rule_bias(fix2 p0, fix2 p1) {
   fix2 delta = {p1.x - p0.x, p1.y - p0.y};
 
   bool is_top = (delta.y == 0) && (delta.x < 0);
@@ -444,17 +445,17 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
     int xmax = MIN(width - 1, ((MAX(MAX(p0.x, p1.x), p2.x)) >> FIX_SHIFT) + 1);
     int ymax = MIN(height - 1, ((MAX(MAX(p0.y, p1.y), p2.y)) >> FIX_SHIFT) + 1);
 
-    int b0 = fill_rule_bias(p0, p1);
-    int b1 = fill_rule_bias(p1, p2);
-    int b2 = fill_rule_bias(p2, p0);
+    int b0 = fix_fill_rule_bias(p1, p2);
+    int b1 = fix_fill_rule_bias(p2, p0);
+    int b2 = fix_fill_rule_bias(p0, p1);
 
     for (int y = ymin; y <= ymax; y++) {
       for (int x = xmin; x <= xmax; x++) {
         fix2 p = {(x << FIX_SHIFT) + FIX_HALF, (y << FIX_SHIFT) + FIX_HALF};
 
-        fix32_t a0 = fix_signed_area(p0, p1, p) + b0;
-        fix32_t a1 = fix_signed_area(p1, p2, p) + b1;
-        fix32_t a2 = fix_signed_area(p2, p0, p) + b2;
+        fix32_t a0 = fix_signed_area(p1, p2, p) + b0;
+        fix32_t a1 = fix_signed_area(p2, p0, p) + b1;
+        fix32_t a2 = fix_signed_area(p0, p1, p) + b2;
 
         if (a0 < 0 || a1 < 0 || a2 < 0) continue;
 
@@ -466,22 +467,24 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
         };
         float w_sum = w.x + w.y + w.z;
 
+        // depth test
         float depth =
-          (scr_pos[0].z * w.y + scr_pos[1].z * w.z + scr_pos[2].z * w.x) /
+          (scr_pos[0].z * w.x + scr_pos[1].z * w.y + scr_pos[2].z * w.z) /
           w_sum;
 
         int idx = x + y * width;
         if (depth >= depth_buffer[idx]) continue;
         depth_buffer[idx] = depth;
 
+        // interpolate vertex normals for lighting calculation
         vec3 nx = (vec3){normals[0].x, normals[1].x, normals[2].x};
         vec3 ny = (vec3){normals[0].y, normals[1].y, normals[2].y};
         vec3 nz = (vec3){normals[0].z, normals[1].z, normals[2].z};
 
         vec3 normal = {
-          (nx.x * w.y + nx.y * w.z + nx.z * w.x) / w_sum,
-          (ny.x * w.y + ny.y * w.z + ny.z * w.x) / w_sum,
-          (nz.x * w.y + nz.y * w.z + nz.z * w.x) / w_sum,
+          (nx.x * w.x + nx.y * w.y + nx.z * w.z) / w_sum,
+          (ny.x * w.x + ny.y * w.y + ny.z * w.z) / w_sum,
+          (nz.x * w.x + nz.y * w.y + nz.z * w.z) / w_sum,
         };
 
         // diffuse lighting
@@ -549,23 +552,45 @@ int write_bmp_image(const char *file_name, int32_t width, int32_t height,
 
 /* MAIN --------------------------------------------------------------------- */
 int main(int argc, char **argv) {
+  if (argc > 2) error_and_exit("Invalid command line arguments");
+
   size_t vertex_count;
   Vertex *vertices;
-
-  if (argc > 2) {
-    fprintf(stderr, "Error: Invalid command line arguments");
-    return EXIT_FAILURE;
-  }
 
   if (argc == 1) {
     parse_obj_str(strlen(TEAPOT_OBJ), (char *)TEAPOT_OBJ, &vertex_count,
                   &vertices);
 
-    // TODO: mirror vertices
+    // embedded teapot data only contains half of the teapot, so we need to
+    // mirror all of the vertices and normals
+    vertices = xrealloc(vertices, 2 * vertex_count * sizeof(*vertices));
+    for (size_t i = 0; i < vertex_count; i += 3) {
+      Vertex v0 = vertices[i];
+      Vertex v1 = vertices[i + 1];
+      Vertex v2 = vertices[i + 2];
+
+      v0.position.z *= -1;
+      v0.normal.z *= -1;
+
+      v1.position.z *= -1;
+      v1.normal.z *= -1;
+
+      v2.position.z *= -1;
+      v2.normal.z *= -1;
+
+      // mirroring flips winding order, so we need to swap two vertices
+      // to negate that
+      vertices[vertex_count + i] = v0;
+      vertices[vertex_count + i + 1] = v2;
+      vertices[vertex_count + i + 2] = v1;
+    }
+    vertex_count = 2 * vertex_count;
+
   } else {
     char *fp;
     long flen;
-    load_file(argv[1], &flen, &fp);
+    int res = load_file(argv[1], &flen, &fp);
+    if (res != 0) error_and_exit("Failed to load .obj file");
     parse_obj_str(flen, fp, &vertex_count, &vertices);
   }
 
@@ -586,7 +611,7 @@ int main(int argc, char **argv) {
 
   // position camera so that model is fully visible
   float max_dist = 0;
-  for (uint32_t i = 0; i < vertex_count; i++) {
+  for (size_t i = 0; i < vertex_count; i++) {
     vec3 p = vertices[i].position;
     float dist_sq = vec3_dot(p, p);
     max_dist = (dist_sq > max_dist) ? dist_sq : max_dist;
@@ -603,19 +628,15 @@ int main(int argc, char **argv) {
   mat4 view_matrix =
     mat4_look_at(camera_pos, (vec3){0, 0, 0}, (vec3){0, -1, 0});
 
+  // render and write image
   uint32_t *color_buffer = xmalloc(WIDTH * HEIGHT * sizeof(*color_buffer));
   float *depth_buffer = xmalloc(WIDTH * HEIGHT * sizeof(*depth_buffer));
 
   render(vertex_count, vertices, color_buffer, depth_buffer, WIDTH, HEIGHT,
          view_matrix);
 
-  if (write_bmp_image(OUPUT_FILE_NAME, WIDTH, HEIGHT, color_buffer) != 0) {
-    perror("Error writing output image: ");
-    free(vertices);
-    free(color_buffer);
-    free(depth_buffer);
-    return EXIT_FAILURE;
-  }
+  int res = write_bmp_image(OUPUT_FILE_NAME, WIDTH, HEIGHT, color_buffer);
+  if (res != 0) error_and_exit("Failed to write output image");
 
   free(vertices);
   free(color_buffer);

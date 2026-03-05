@@ -632,6 +632,7 @@ int main(int argc, char **argv) {
     int res = load_file(argv[1], &flen, &fp);
     if (res != 0) error_and_exit("Failed to load .obj file");
     parse_obj_str(flen, fp, &vertex_count, &vertices);
+    free(fp);
   }
 
   // center model at origin

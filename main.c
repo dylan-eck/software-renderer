@@ -116,8 +116,8 @@ const char *TEAPOT_OBJ; // See the end of this file for teapot model data
 static const uint32_t WIDTH = 800;
 static const uint32_t HEIGHT = 800;
 static const float FOV_Y = 3.1415f / 4;
-static const float NEAR_CLIP = 0.1;
-static const float FAR_CLIP = 400.0;
+static const float NEAR_CLIP = 0.1f;
+static const float FAR_CLIP = 400.0f;
 
 static const char *OUPUT_FILE_NAME = "out.bmp";
 
@@ -187,7 +187,8 @@ void print_progress_bar(float progress, int length, const char *prefix) {
 
 /* VECTOR/MATRIX MATH FUNCTIONS --------------------------------------------- */
 fix2 fix2_create(float x, float y) {
-  return (fix2){roundf(x * (1 << FIX_SHIFT)), roundf(y * (1 << FIX_SHIFT))};
+  return (fix2){(fix32_t)roundf(x * (1 << FIX_SHIFT)),
+                (fix32_t)roundf(y * (1 << FIX_SHIFT))};
 }
 
 fix32_t fix_signed_area(fix2 a, fix2 b, fix2 c) {
@@ -361,10 +362,10 @@ void parse_obj_str(long file_size, char *file, size_t *vertex_count,
         DARRAY_APPEND(face_verts, vert);
       }
 
-      for (size_t i = 2; i < face_verts.size; i++) {
+      for (size_t j = 2; j < face_verts.size; j++) {
         DARRAY_APPEND(mesh_verts, face_verts.items[0]);
-        DARRAY_APPEND(mesh_verts, face_verts.items[i - 1]);
-        DARRAY_APPEND(mesh_verts, face_verts.items[i]);
+        DARRAY_APPEND(mesh_verts, face_verts.items[j - 1]);
+        DARRAY_APPEND(mesh_verts, face_verts.items[j]);
       }
     } else if (*p == 'v') {
       float x, y, z;
@@ -466,8 +467,8 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
       normals[j] = vec3_norm((vec3){wn.x, wn.y, wn.z});
 
       scr_pos[j] = (vec3){
-        clip_pos.x / clip_pos.w * 0.5 + 0.5,
-        clip_pos.y / clip_pos.w * 0.5 + 0.5,
+        clip_pos.x / clip_pos.w * 0.5f + 0.5f,
+        clip_pos.y / clip_pos.w * 0.5f + 0.5f,
         clip_pos.z / clip_pos.w,
       };
     }
@@ -527,12 +528,12 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
         };
 
         // diffuse lighting
-        float ambient = 0.1;
+        float ambient = 0.1f;
         float light = MAX(vec3_dot(normal, params.sun_dir), 0) + ambient;
 
-        uint8_t r = fminf(fmaxf(light, 0.0f), 1.0f) * 255;
-        uint8_t g = fminf(fmaxf(light, 0.0f), 1.0f) * 255;
-        uint8_t b = fminf(fmaxf(light, 0.0f), 1.0f) * 255;
+        uint8_t r = (uint8_t)(fminf(fmaxf(light, 0.0f), 1.0f) * 255);
+        uint8_t g = (uint8_t)(fminf(fmaxf(light, 0.0f), 1.0f) * 255);
+        uint8_t b = (uint8_t)(fminf(fmaxf(light, 0.0f), 1.0f) * 255);
 
         color_buffer[idx] = (0xFF << 24) | (r << 16) | (g << 8) | b;
       }
@@ -661,7 +662,7 @@ int main(int argc, char **argv) {
   float min_fov = (WIDTH >= HEIGHT) ? FOV_Y : (FOV_Y * (float)WIDTH / HEIGHT);
   float camera_dist = fabsf(max_dist / sinf(min_fov * 0.5f));
 
-  vec3 camera_pos = vec3_norm((vec3){1, -1, 2});
+  vec3 camera_pos = vec3_norm((vec3){-1, -0.8f, -1});
   camera_pos.x *= camera_dist;
   camera_pos.y *= camera_dist;
   camera_pos.z *= camera_dist;

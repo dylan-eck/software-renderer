@@ -40,7 +40,7 @@
  *   To change output width/height, field of view, and output file name, see the
  *   CONSTANTS section of this file.
  *
- *   To change the camera position and sun direction see lines XXX and YYY of
+ *   To change the camera position and sun direction see lines 670 and 691 of
  *   this file.
  *
  *

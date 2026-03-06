@@ -37,8 +37,8 @@
  *   Render external .obj:
  *     ./a.out path/to/model.obj
  *
- *   To change output width/height, field of view, clipping planes, and output
- *   file name, see the CONSTANTS section of this file.
+ *   To change output width/height, field of view, and output file name, see the
+ *   CONSTANTS section of this file.
  *
  *   To change the camera position and sun direction see lines XXX and YYY of
  *   this file.
@@ -116,8 +116,6 @@ const char *TEAPOT_OBJ; // See the end of this file for teapot model data
 static const uint32_t WIDTH = 800;
 static const uint32_t HEIGHT = 800;
 static const float FOV_Y = 3.1415f / 4;
-static const float NEAR_CLIP = 0.1f;
-static const float FAR_CLIP = 400.0f;
 
 static const char *OUPUT_FILE_NAME = "out.bmp";
 
@@ -340,9 +338,8 @@ void parse_obj_str(long file_size, char *file, size_t *vertex_count,
       print_progress_bar((float)i / file_size, 30, "loading model: ");
     }
 
-    if (p != file && *(p - 1) != '\n') {
+    while (p != file && *(p - 1) != '\n') {
       p++;
-      continue;
     };
 
     if (*p == 'f') {
@@ -350,9 +347,10 @@ void parse_obj_str(long file_size, char *file, size_t *vertex_count,
 
       face_verts.size = 0;
 
-      while (*p && *p != '\n') {
+      while (*p && !isalpha(*p) && *p != '#') {
         int32_t v, vt, vn;
         p = obj_parse_indices(p, &v, &vt, &vn);
+        while (*p && isspace(*p)) p++;
 
         Vertex vert;
         vert.position = vs.items[v - 1];
@@ -361,6 +359,7 @@ void parse_obj_str(long file_size, char *file, size_t *vertex_count,
 
         DARRAY_APPEND(face_verts, vert);
       }
+      p--;
 
       for (size_t j = 2; j < face_verts.size; j++) {
         DARRAY_APPEND(mesh_verts, face_verts.items[0]);
@@ -636,6 +635,12 @@ int main(int argc, char **argv) {
     free(fp);
   }
 
+  // printf("vertex count: %lu\n", vertex_count);
+  // for (size_t i = 0; i < vertex_count; i++) {
+  //   vec3 p = vertices[i].position;
+  //   printf("% 5.3f % 5.3f % 5.3f\n", p.x, p.y, p.z);
+  // }
+
   // center model at origin
   vec3 avg_position = {0};
   for (size_t i = 0; i < vertex_count; i++) {
@@ -662,7 +667,7 @@ int main(int argc, char **argv) {
   float min_fov = (WIDTH >= HEIGHT) ? FOV_Y : (FOV_Y * (float)WIDTH / HEIGHT);
   float camera_dist = fabsf(max_dist / sinf(min_fov * 0.5f));
 
-  vec3 camera_pos = vec3_norm((vec3){-1, -0.8f, -1});
+  vec3 camera_pos = vec3_norm((vec3){0, 0, 1});
   camera_pos.x *= camera_dist;
   camera_pos.y *= camera_dist;
   camera_pos.z *= camera_dist;
@@ -670,10 +675,10 @@ int main(int argc, char **argv) {
   // create transformation matrices
   mat4 model_mat = {{1, 0, 0, 0}, {0, 1, 0, 0}, {0, 0, 1, 0}, {0, 0, 0, 1}};
 
-  mat4 view_mat = mat4_look_at(camera_pos, (vec3){0, 0, 0}, (vec3){0, -1, 0});
+  mat4 view_mat = mat4_look_at(camera_pos, (vec3){0, 0, 0}, (vec3){0, 1, 0});
 
   mat4 projection_mat =
-    mat4_perspective((float)WIDTH / HEIGHT, FOV_Y, NEAR_CLIP, FAR_CLIP);
+    mat4_perspective((float)WIDTH / HEIGHT, FOV_Y, 0.1f, 1.5f * camera_dist);
 
   // render and write image
   uint32_t *color_buffer = xmalloc(WIDTH * HEIGHT * sizeof(*color_buffer));
@@ -683,7 +688,7 @@ int main(int argc, char **argv) {
     .model_mat = model_mat,
     .view_mat = view_mat,
     .projection_mat = projection_mat,
-    .sun_dir = vec3_norm((vec3){.x = 0, .y = -1, .z = 0}),
+    .sun_dir = vec3_norm((vec3){.x = 0, .y = 1, .z = 0}),
   };
 
   render(vertex_count, vertices, color_buffer, depth_buffer, WIDTH, HEIGHT,

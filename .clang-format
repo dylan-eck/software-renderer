@@ -3,3 +3,4 @@ BasedOnStyle: LLVM
 UseTab: Never
 ContinuationIndentWidth: 2
 AllowShortIfStatementsOnASingleLine: Always
+AllowShortLoopsOnASingleLine: True

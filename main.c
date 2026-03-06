@@ -40,7 +40,7 @@
  *   To change output width/height, field of view, and output file name, see the
  *   CONSTANTS section of this file.
  *
- *   To change the camera position and sun direction see lines 670 and 691 of
+ *   To change the camera position and sun direction see lines 673 and 694 of
  *   this file.
  *
  *
@@ -426,9 +426,10 @@ int fix_fill_rule_bias(fix2 p0, fix2 p1) {
   return (is_top || is_left) ? 0 : -1;
 }
 
-void render(const uint32_t vertex_count, const Vertex *vertices,
-            uint32_t *color_buffer, float *depth_buffer, const uint32_t width,
-            const uint32_t height, RenderParams params) {
+int render(const uint32_t vertex_count, const Vertex *vertices,
+           uint32_t *color_buffer, float *depth_buffer, const int32_t width,
+           const int32_t height, RenderParams params) {
+  if (width <= 0 || height == 0) return -1;
 
   // clear buffers
   for (size_t i = 0; i < width * height; i++) {
@@ -539,6 +540,7 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
     }
   }
   print_progress_bar(1, 30, "    rendering: ");
+  return 0;
 }
 
 /* FILE WRITING FUNCTIONS --------------------------------------------------- */
@@ -595,6 +597,7 @@ int main(int argc, char **argv) {
 
   size_t vertex_count;
   Vertex *vertices;
+  int res;
 
   if (argc == 1) {
     printf("no model specified, rendering embedded teapot model\n");
@@ -629,7 +632,7 @@ int main(int argc, char **argv) {
     printf("rendering model %s\n", argv[1]);
     char *fp;
     long flen;
-    int res = load_file(argv[1], &flen, &fp);
+    res = load_file(argv[1], &flen, &fp);
     if (res != 0) error_and_exit("Failed to load .obj file");
     parse_obj_str(flen, fp, &vertex_count, &vertices);
     free(fp);
@@ -691,10 +694,11 @@ int main(int argc, char **argv) {
     .sun_dir = vec3_norm((vec3){.x = 0, .y = 1, .z = 0}),
   };
 
-  render(vertex_count, vertices, color_buffer, depth_buffer, WIDTH, HEIGHT,
-         params);
+  res = render(vertex_count, vertices, color_buffer, depth_buffer, WIDTH,
+               HEIGHT, params);
+  if (res != 0) error_and_exit("Rendering failed");
 
-  int res = write_bmp_image(OUPUT_FILE_NAME, WIDTH, HEIGHT, color_buffer);
+  res = write_bmp_image(OUPUT_FILE_NAME, WIDTH, HEIGHT, color_buffer);
   if (res != 0) error_and_exit("Failed to write output image");
   printf("wrote output image %s\n", OUPUT_FILE_NAME);
 

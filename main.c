@@ -79,7 +79,7 @@
 #define MAX(a, b) (((a) > (b)) ? (a) : (b))
 
 // helpers for fixed point math
-#define FIX_SHIFT 16
+#define FIX_SHIFT 8
 #define FIX_HALF ((1 << FIX_SHIFT) >> 1)
 #define FIX_MASK ((1 << FIX_SHIFT) - 1)
 
@@ -113,8 +113,8 @@
 /* CONSTANTS ---------------------------------------------------------------- */
 const char *TEAPOT_OBJ; // See the end of this file for teapot model data
 
-static const uint32_t WIDTH = 800;
-static const uint32_t HEIGHT = 800;
+static const uint32_t WIDTH = 1920;
+static const uint32_t HEIGHT = 1080;
 static const float FOV_Y = 3.1415f / 4;
 
 static const char *OUPUT_FILE_NAME = "out.bmp";
@@ -190,16 +190,10 @@ fix2 fix2_create(float x, float y) {
 }
 
 fix32_t fix_signed_area(fix2 a, fix2 b, fix2 c) {
-  // note this function actually returns twice the signed area, but in this
-  // program the exact magnitude is not important, so there is no need to divide
-  // by two
-  fix2 c_sub_a = {c.x - a.x, c.y - a.y};
-  fix2 b_sub_a = {b.x - a.x, b.y - a.y};
+  int64_t cross =
+    (int64_t)(c.x - a.x) * (b.y - a.y) - (int64_t)(b.x - a.x) * (c.y - a.y);
 
-  fix32_t l = (fix32_t)(((int64_t)c_sub_a.x * b_sub_a.y) >> FIX_SHIFT);
-  fix32_t r = (fix32_t)(((int64_t)b_sub_a.x * c_sub_a.y) >> FIX_SHIFT);
-
-  return l - r;
+  return (fix32_t)(cross >> FIX_SHIFT);
 }
 
 vec3 vec3_sub(vec3 v1, vec3 v2) {
@@ -429,7 +423,7 @@ int fix_fill_rule_bias(fix2 p0, fix2 p1) {
 int render(const uint32_t vertex_count, const Vertex *vertices,
            uint32_t *color_buffer, float *depth_buffer, const int32_t width,
            const int32_t height, RenderParams params) {
-  if (width <= 0 || height == 0) return -1;
+  if (width <= 0 || height <= 0) return -1;
 
   // clear buffers
   for (size_t i = 0; i < width * height; i++) {
@@ -478,24 +472,23 @@ int render(const uint32_t vertex_count, const Vertex *vertices,
     fix2 p1 = fix2_create(scr_pos[1].x * width, scr_pos[1].y * height);
     fix2 p2 = fix2_create(scr_pos[2].x * width, scr_pos[2].y * height);
 
-    if (fix_signed_area(p0, p1, p2) <= 0) continue;
+    if (fix_signed_area(p0, p1, p2) < 0) continue;
 
     int xmin = MAX(0, MIN(MIN(p0.x, p1.x), p2.x) >> FIX_SHIFT);
     int ymin = MAX(0, MIN(MIN(p0.y, p1.y), p2.y) >> FIX_SHIFT);
-    int xmax = MIN(width - 1, ((MAX(MAX(p0.x, p1.x), p2.x)) >> FIX_SHIFT) + 1);
-    int ymax = MIN(height - 1, ((MAX(MAX(p0.y, p1.y), p2.y)) >> FIX_SHIFT) + 1);
-
-    int b0 = fix_fill_rule_bias(p1, p2);
-    int b1 = fix_fill_rule_bias(p2, p0);
-    int b2 = fix_fill_rule_bias(p0, p1);
+    int xmax = MIN(width - 1, MAX(MAX(p0.x, p1.x), p2.x) >> FIX_SHIFT);
+    int ymax = MIN(height - 1, MAX(MAX(p0.y, p1.y), p2.y) >> FIX_SHIFT);
 
     for (int y = ymin; y <= ymax; y++) {
       for (int x = xmin; x <= xmax; x++) {
         fix2 p = {(x << FIX_SHIFT) + FIX_HALF, (y << FIX_SHIFT) + FIX_HALF};
 
-        fix32_t a0 = fix_signed_area(p1, p2, p) + b0;
-        fix32_t a1 = fix_signed_area(p2, p0, p) + b1;
-        fix32_t a2 = fix_signed_area(p0, p1, p) + b2;
+        // note we don't really need to do the full signed area calculation
+        // for each pixel, but the code is simpler this way
+        // (and this is efficient enough for this project)
+        fix32_t a0 = fix_signed_area(p1, p2, p);
+        fix32_t a1 = fix_signed_area(p2, p0, p);
+        fix32_t a2 = fix_signed_area(p0, p1, p);
 
         if (a0 < 0 || a1 < 0 || a2 < 0) continue;
 
@@ -681,7 +674,7 @@ int main(int argc, char **argv) {
   mat4 view_mat = mat4_look_at(camera_pos, (vec3){0, 0, 0}, (vec3){0, 1, 0});
 
   mat4 projection_mat =
-    mat4_perspective((float)WIDTH / HEIGHT, FOV_Y, 0.1f, 1.5f * camera_dist);
+    mat4_perspective((float)WIDTH / HEIGHT, FOV_Y, 0.1f, 2.0f * camera_dist);
 
   // render and write image
   uint32_t *color_buffer = xmalloc(WIDTH * HEIGHT * sizeof(*color_buffer));
@@ -691,7 +684,7 @@ int main(int argc, char **argv) {
     .model_mat = model_mat,
     .view_mat = view_mat,
     .projection_mat = projection_mat,
-    .sun_dir = vec3_norm((vec3){.x = 0, .y = 1, .z = 0}),
+    .sun_dir = vec3_norm((vec3){.x = 0, .y = 1, .z = 2}),
   };
 
   res = render(vertex_count, vertices, color_buffer, depth_buffer, WIDTH,

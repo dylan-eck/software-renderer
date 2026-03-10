@@ -176,17 +176,18 @@ int parse_int32(const char *str, int32_t *res) {
   return 0;
 }
 
-void print_progress_bar(float progress, int length, const char *prefix) {
+void print_progress_bar(float progress, const char *prefix) {
+  static const int length = 20;
+
   if (progress >= 1) {
     printf("\r%sdone%*s\n", prefix, length, "");
     return;
   }
 
-  printf("\r%s[", prefix);
-  for (int i = 0; i < length; i++) {
-    putchar(i < (int)(progress * length) ? '#' : ' ');
-  }
-  printf("]");
+  static const char *full = "####################";
+  int filled = (int)(progress * length);
+
+  printf("\r%s[%.*s%*s]", prefix, filled, full, length - filled, "");
   fflush(stdout);
 }
 
@@ -336,7 +337,7 @@ void parse_obj_str(long file_size, char *file, size_t *vertex_count,
   while (p < end) {
     float progress = (float)(p - file) / file_size;
     if ((int)(progress * 100) % 5 == 0) {
-      print_progress_bar(progress, 30, "loading model: ");
+      print_progress_bar(progress, "loading model: ");
     }
 
     while (p != file && *(p - 1) != '\n') {
@@ -386,7 +387,7 @@ void parse_obj_str(long file_size, char *file, size_t *vertex_count,
 
     p++;
   }
-  print_progress_bar(1, 30, "loading model: ");
+  print_progress_bar(1, "loading model: ");
 
   // calculate normals if the model doesn't include them already
   if (vns.size == 0) {
@@ -418,12 +419,13 @@ void parse_obj_str(long file_size, char *file, size_t *vertex_count,
 }
 
 /* RENDERING FUNCTIONS ------------------------------------------------------ */
-void render(const uint32_t vertex_count, const Vertex *vertices,
-            uint32_t *color_buffer, float *depth_buffer, const int32_t width,
-            const int32_t height, RenderParams params) {
+int render(const uint32_t vertex_count, const Vertex *vertices,
+           uint32_t *color_buffer, float *depth_buffer, const int32_t width,
+           const int32_t height, RenderParams params) {
+  if (width < 1 || height < 1) return -1;
 
   // clear buffers
-  for (size_t i = 0; i < width * height; i++) {
+  for (size_t i = 0; i < (uint32_t)width * height; i++) {
     color_buffer[i] = 0xFF000000;
     depth_buffer[i] = 1.0f;
   }
@@ -434,7 +436,7 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
   for (size_t i = 0; i < vertex_count; i += 3) {
     float progress = (float)i / vertex_count;
     if ((int)(progress * 100) % 5 == 0) {
-      print_progress_bar(progress, 30, "    rendering: ");
+      print_progress_bar(progress, "    rendering: ");
     }
 
     vec3 scr_pos[3];
@@ -530,7 +532,8 @@ void render(const uint32_t vertex_count, const Vertex *vertices,
       }
     }
   }
-  print_progress_bar(1, 30, "    rendering: ");
+  print_progress_bar(1, "    rendering: ");
+  return 0;
 }
 
 /* FILE WRITING FUNCTIONS --------------------------------------------------- */
@@ -592,10 +595,10 @@ int main(int argc, char **argv) {
   int32_t width = 800, height = -1;
   const char *file_path = NULL;
 
-  int i = 1;
-  if (argc > i && parse_int32(argv[i], NULL) == -1) file_path = argv[i++];
-  if (argc > i) parse_int32(argv[i++], &width);
-  if (argc > i) parse_int32(argv[i], &height);
+  int idx = 1;
+  if (argc > idx && parse_int32(argv[idx], NULL) == -1) file_path = argv[idx++];
+  if (argc > idx) parse_int32(argv[idx++], &width);
+  if (argc > idx) parse_int32(argv[idx], &height);
 
   if (height == -1) height = width;
   if (width < 1 || height < 1 || width > INT32_MAX || height > INT32_MAX) {
@@ -696,8 +699,9 @@ int main(int argc, char **argv) {
     .sun_dir = vec3_norm((vec3){.x = 0, .y = 1, .z = 2}),
   };
 
-  render(vertex_count, vertices, color_buffer, depth_buffer, width, height,
-         params);
+  res = render(vertex_count, vertices, color_buffer, depth_buffer, width,
+               height, params);
+  if (res != 0) error_and_exit("Rendering failed");
 
   res = write_bmp_image(OUPUT_FILE_NAME, width, height, color_buffer);
   if (res != 0) error_and_exit("Failed to write output image");

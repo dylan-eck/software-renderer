@@ -67,6 +67,7 @@
 
 /* INCLUDES ----------------------------------------------------------------- */
 #include <ctype.h>
+#include <errno.h>
 #include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -167,6 +168,17 @@ void *xrealloc(void *ptr, size_t size) {
   void *tmp = realloc(ptr, size);
   if (tmp == NULL) error_and_exit("Memory allocation failed");
   return tmp;
+}
+
+int32_t parse_int32(const char *str) {
+  char *end;
+  errno = 0;
+  long val = strtol(str, &end, 10);
+  if (end == str || *end != '\0' || errno == ERANGE || val < INT32_MIN ||
+      val > INT32_MAX) {
+    return -1;
+  }
+  return (int32_t)val;
 }
 
 void print_progress_bar(float progress, int length, const char *prefix) {
@@ -586,7 +598,19 @@ int write_bmp_image(const char *file_name, int32_t width, int32_t height,
 
 /* MAIN --------------------------------------------------------------------- */
 int main(int argc, char **argv) {
-  if (argc > 2) error_and_exit("Invalid command line arguments");
+  if (argc > 4) {
+    fprintf(stderr, "Usage: %s [model.obj] [width [height]]\n", argv[0]);
+    return EXIT_FAILURE;
+  }
+
+  int32_t width = 800, height = -1;
+  const char *file_path = "";
+
+  int i = 1;
+  if (argc > 1 && parse_int32(argv[i]) == -1) file_path = argv[i++];
+  if (argc > i) width = parse_int32(argv[i++]);
+  if (argc > i) height = parse_int32(argv[i]);
+  if (height == -1) height = width;
 
   size_t vertex_count;
   Vertex *vertices;

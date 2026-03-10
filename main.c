@@ -418,10 +418,9 @@ void parse_obj_str(long file_size, char *file, size_t *vertex_count,
 }
 
 /* RENDERING FUNCTIONS ------------------------------------------------------ */
-int render(const uint32_t vertex_count, const Vertex *vertices,
-           uint32_t *color_buffer, float *depth_buffer, const int32_t width,
-           const int32_t height, RenderParams params) {
-  if (width < 1 || height < 1) return -1;
+void render(const uint32_t vertex_count, const Vertex *vertices,
+            uint32_t *color_buffer, float *depth_buffer, const int32_t width,
+            const int32_t height, RenderParams params) {
 
   // clear buffers
   for (size_t i = 0; i < width * height; i++) {
@@ -532,7 +531,6 @@ int render(const uint32_t vertex_count, const Vertex *vertices,
     }
   }
   print_progress_bar(1, 30, "    rendering: ");
-  return 0;
 }
 
 /* FILE WRITING FUNCTIONS --------------------------------------------------- */
@@ -600,7 +598,11 @@ int main(int argc, char **argv) {
   if (argc > i) parse_int32(argv[i], &height);
 
   if (height == -1) height = width;
-  if (width < 1 || height < 1) error_and_exit("Width and height must be >= 1");
+  if (width < 1 || height < 1 || width > INT32_MAX || height > INT32_MAX) {
+    fprintf(stderr, "Error: width and height must be in the range [1, %d]\n",
+            INT32_MAX);
+    return EXIT_FAILURE;
+  }
 
   printf("rendering %s\n", file_path ? file_path : "embedded teapot model");
 
@@ -694,9 +696,8 @@ int main(int argc, char **argv) {
     .sun_dir = vec3_norm((vec3){.x = 0, .y = 1, .z = 2}),
   };
 
-  res = render(vertex_count, vertices, color_buffer, depth_buffer, width,
-               height, params);
-  if (res != 0) error_and_exit("Rendering failed");
+  render(vertex_count, vertices, color_buffer, depth_buffer, width, height,
+         params);
 
   res = write_bmp_image(OUPUT_FILE_NAME, width, height, color_buffer);
   if (res != 0) error_and_exit("Failed to write output image");

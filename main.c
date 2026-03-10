@@ -337,9 +337,9 @@ void parse_obj_str(long file_size, char *file, size_t *vertex_count,
   char *p = file;
   char *end = file + file_size;
   while (p < end) {
-    size_t i = p - file;
-    if ((i * 3) % 10000 == 0) {
-      print_progress_bar((float)i / file_size, 30, "loading model: ");
+    float progress = (float)(p - file) / file_size;
+    if ((int)(progress * 100) % 5 == 0) {
+      print_progress_bar(progress, 30, "loading model: ");
     }
 
     while (p != file && *(p - 1) != '\n') {
@@ -436,8 +436,9 @@ int render(const uint32_t vertex_count, const Vertex *vertices,
                              params.model_mat);
 
   for (size_t i = 0; i < vertex_count; i += 3) {
-    if ((i * 3) % 10000 == 0) {
-      print_progress_bar((float)i / vertex_count, 30, "    rendering: ");
+    float progress = (float)i / vertex_count;
+    if ((int)(progress * 100) % 5 == 0) {
+      print_progress_bar(progress, 30, "    rendering: ");
     }
 
     vec3 scr_pos[3];

@@ -11,7 +11,7 @@
  *
  *   If no .obj file is provided, the program renders a low-resolution version
  *   of the Utah Teapot using embedded .obj data included at the end of this
- *   file. (https://graphics.cs.utah.edu/teapot/)
+ *   file.
  *
  *
  * BUILDING:
@@ -31,18 +31,17 @@
  * USAGE:
  * -----------------------------------------------------------------------------
  *
- *   Render embedded teapot:
+ *   ./a.out [path/to/model.obj] [width [height]]
+ *
+ *   All arguments are optional. If no arguments are passed, the embedded teapot
+ *   model is rendered at the default resolution. If width is specified but not
+ *   height, the output image will be square.
+ *
+ *   Examples:
+ *
  *     ./a.out
- *
- *   Render external .obj:
- *     ./a.out path/to/model.obj
- *
- *   To change output width/height, field of view, and output file name, see the
- *   CONSTANTS section of this file.
- *
- *   To change the camera position and sun direction see lines 673 and 694 of
- *   this file.
- *
+ *     ./a.out 2048
+ *     ./a.out 1920 1080
  *
  * NOTE ON DESIGN TRADEOFFS
  * -----------------------------------------------------------------------------
@@ -57,7 +56,7 @@
  *     - Abstractions are introduced only when reused or logic is complex
  *     - Only the operations required by the renderer are implemented
  *
- *   In a production environment, this code would likely be refactored into
+ *   In a production environment, this code would be refactored into
  *   multiple translation units with stronger validation, clearer module
  *   boundaries, and more complete math utilities.
  *
@@ -140,7 +139,6 @@ typedef struct {
   mat4 view_mat;
   mat4 projection_mat;
   vec3 sun_dir;
-  float fov_y;
 } RenderParams;
 
 DARRAY_DEFINE(vec2, vec2_da);
@@ -165,7 +163,6 @@ void *xrealloc(void *ptr, size_t size) {
   return tmp;
 }
 
-// you can set res to null if you just want to check that str is a valid int32
 int parse_int32(const char *str, int32_t *res) {
   char *end;
   errno = 0;
@@ -589,7 +586,8 @@ int write_bmp_image(const char *file_name, int32_t width, int32_t height,
 /* MAIN --------------------------------------------------------------------- */
 int main(int argc, char **argv) {
   if (argc > 4) {
-    fprintf(stderr, "Usage: %s [model.obj] [width [height]]\n", argv[0]);
+    fprintf(stderr, "Usage: %s [path/to/model.obj] [width [height]]\n",
+            argv[0]);
     return EXIT_FAILURE;
   }
 

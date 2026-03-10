@@ -113,11 +113,6 @@
 
 /* CONSTANTS ---------------------------------------------------------------- */
 const char *TEAPOT_OBJ; // See the end of this file for teapot model data
-
-static const uint32_t WIDTH = 1920;
-static const uint32_t HEIGHT = 1080;
-static const float FOV_Y = 3.1415f / 4;
-
 static const char *OUPUT_FILE_NAME = "out.bmp";
 
 /* TYPEDEFS ----------------------------------------------------------------- */
@@ -170,7 +165,8 @@ void *xrealloc(void *ptr, size_t size) {
   return tmp;
 }
 
-int32_t parse_int32(const char *str) {
+// you can set res to null if you just want to check that str is a valid int32
+int parse_int32(const char *str, int32_t *res) {
   char *end;
   errno = 0;
   long val = strtol(str, &end, 10);
@@ -178,7 +174,9 @@ int32_t parse_int32(const char *str) {
       val > INT32_MAX) {
     return -1;
   }
-  return (int32_t)val;
+
+  if (res) *res = (int32_t)val;
+  return 0;
 }
 
 void print_progress_bar(float progress, int length, const char *prefix) {
@@ -423,19 +421,10 @@ void parse_obj_str(long file_size, char *file, size_t *vertex_count,
 }
 
 /* RENDERING FUNCTIONS ------------------------------------------------------ */
-int fix_fill_rule_bias(fix2 p0, fix2 p1) {
-  fix2 delta = {p1.x - p0.x, p1.y - p0.y};
-
-  bool is_top = (delta.y == 0) && (delta.x < 0);
-  bool is_left = delta.y > 0;
-
-  return (is_top || is_left) ? 0 : -1;
-}
-
 int render(const uint32_t vertex_count, const Vertex *vertices,
            uint32_t *color_buffer, float *depth_buffer, const int32_t width,
            const int32_t height, RenderParams params) {
-  if (width <= 0 || height <= 0) return -1;
+  if (width < 1 || height < 1) return -1;
 
   // clear buffers
   for (size_t i = 0; i < width * height; i++) {
@@ -604,20 +593,31 @@ int main(int argc, char **argv) {
   }
 
   int32_t width = 800, height = -1;
-  const char *file_path = "";
+  const char *file_path = NULL;
 
   int i = 1;
-  if (argc > 1 && parse_int32(argv[i]) == -1) file_path = argv[i++];
-  if (argc > i) width = parse_int32(argv[i++]);
-  if (argc > i) height = parse_int32(argv[i]);
+  if (argc > i && parse_int32(argv[i], NULL) == -1) file_path = argv[i++];
+  if (argc > i) parse_int32(argv[i++], &width);
+  if (argc > i) parse_int32(argv[i], &height);
+
   if (height == -1) height = width;
+  if (width < 1 || height < 1) error_and_exit("Width and height must be >= 1");
+
+  printf("rendering %s\n", file_path ? file_path : "embedded teapot model");
 
   size_t vertex_count;
   Vertex *vertices;
   int res;
+  if (file_path) {
+    char *fp;
+    long flen;
+    res = load_file(argv[1], &flen, &fp);
+    if (res != 0) error_and_exit("Failed to load .obj file");
 
-  if (argc == 1) {
-    printf("no model specified, rendering embedded teapot model\n");
+    parse_obj_str(flen, fp, &vertex_count, &vertices);
+    free(fp);
+
+  } else {
     parse_obj_str(strlen(TEAPOT_OBJ), (char *)TEAPOT_OBJ, &vertex_count,
                   &vertices);
 
@@ -644,22 +644,7 @@ int main(int argc, char **argv) {
       vertices[vertex_count + i + 2] = v1;
     }
     vertex_count = 2 * vertex_count;
-
-  } else {
-    printf("rendering model %s\n", argv[1]);
-    char *fp;
-    long flen;
-    res = load_file(argv[1], &flen, &fp);
-    if (res != 0) error_and_exit("Failed to load .obj file");
-    parse_obj_str(flen, fp, &vertex_count, &vertices);
-    free(fp);
   }
-
-  // printf("vertex count: %lu\n", vertex_count);
-  // for (size_t i = 0; i < vertex_count; i++) {
-  //   vec3 p = vertices[i].position;
-  //   printf("% 5.3f % 5.3f % 5.3f\n", p.x, p.y, p.z);
-  // }
 
   // center model at origin
   vec3 avg_position = {0};
@@ -679,30 +664,29 @@ int main(int argc, char **argv) {
   // position camera so that model is fully visible
   float max_dist = 0;
   for (size_t i = 0; i < vertex_count; i++) {
-    vec3 p = vertices[i].position;
-    float dist_sq = vec3_dot(p, p);
+    float dist_sq = vec3_dot(vertices[i].position, vertices[i].position);
     max_dist = (dist_sq > max_dist) ? dist_sq : max_dist;
   }
-  max_dist = sqrtf(max_dist) * 1.1f;
-  float min_fov = (WIDTH >= HEIGHT) ? FOV_Y : (FOV_Y * (float)WIDTH / HEIGHT);
-  float camera_dist = fabsf(max_dist / sinf(min_fov * 0.5f));
+  max_dist = sqrtf(max_dist);
 
-  vec3 camera_pos = vec3_norm((vec3){-0.2, 0.4, 1});
+  float fov_y = 3.1415f / 4;
+  float min_fov = (width >= height) ? fov_y : (fov_y * (float)width / height);
+  float camera_dist = fabsf((max_dist * 1.1f) / sinf(min_fov * 0.5f));
+
+  vec3 camera_pos = vec3_norm((vec3){-0.2f, 0.4f, 1});
   camera_pos.x *= camera_dist;
   camera_pos.y *= camera_dist;
   camera_pos.z *= camera_dist;
 
-  // create transformation matrices
+  // setup transformation matrices
   mat4 model_mat = {{1, 0, 0, 0}, {0, 1, 0, 0}, {0, 0, 1, 0}, {0, 0, 0, 1}};
-
   mat4 view_mat = mat4_look_at(camera_pos, (vec3){0, 0, 0}, (vec3){0, 1, 0});
-
   mat4 projection_mat =
-    mat4_perspective((float)WIDTH / HEIGHT, FOV_Y, 0.1f, 2.0f * camera_dist);
+    mat4_perspective((float)width / height, fov_y, 0.1f, 2.0f * camera_dist);
 
   // render and write image
-  uint32_t *color_buffer = xmalloc(WIDTH * HEIGHT * sizeof(*color_buffer));
-  float *depth_buffer = xmalloc(WIDTH * HEIGHT * sizeof(*depth_buffer));
+  uint32_t *color_buffer = xmalloc(width * height * sizeof(*color_buffer));
+  float *depth_buffer = xmalloc(width * height * sizeof(*depth_buffer));
 
   RenderParams params = {
     .model_mat = model_mat,
@@ -711,11 +695,11 @@ int main(int argc, char **argv) {
     .sun_dir = vec3_norm((vec3){.x = 0, .y = 1, .z = 2}),
   };
 
-  res = render(vertex_count, vertices, color_buffer, depth_buffer, WIDTH,
-               HEIGHT, params);
+  res = render(vertex_count, vertices, color_buffer, depth_buffer, width,
+               height, params);
   if (res != 0) error_and_exit("Rendering failed");
 
-  res = write_bmp_image(OUPUT_FILE_NAME, WIDTH, HEIGHT, color_buffer);
+  res = write_bmp_image(OUPUT_FILE_NAME, width, height, color_buffer);
   if (res != 0) error_and_exit("Failed to write output image");
   printf("wrote output image %s\n", OUPUT_FILE_NAME);
 

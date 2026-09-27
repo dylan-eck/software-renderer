@@ -20,12 +20,12 @@
  *   Any C compiler with C99 support should work.
  *
  *   Linux / macOS:
- *     clang -std=c99 main.c -lm
- *     gcc -std=c99 main.c -lm
+ *     clang -std=c99 -lm renderer.c
+ *     gcc -std=c99 -lm renderer.c
  *
  *   Windows:
- *     cl main.c
- *     clang -std=c99 main.c
+ *     cl renderer.c
+ *     clang -std=c99 renderer.c
  *
  *
  * USAGE:
@@ -111,11 +111,10 @@
   } while (0);
 
 /* CONSTANTS ---------------------------------------------------------------- */
-const char *TEAPOT_OBJ; // See the end of this file for teapot model data
+static const char *TEAPOT_OBJ; // See the end of this file for teapot model data
 static const char *OUPUT_FILE_NAME = "out.bmp";
 
 /* TYPEDEFS ----------------------------------------------------------------- */
-// clang-format off
 typedef int32_t fix32_t;
 
 typedef struct { float x, y; } vec2;
@@ -123,7 +122,6 @@ typedef struct { fix32_t x, y; } fix2;
 typedef struct { float x, y, z; } vec3;
 typedef struct { float x, y, z, w; } vec4;
 typedef struct { vec4 col0, col1, col2, col3; } mat4;
-// clang-format on
 
 typedef struct {
   vec3 position;
@@ -716,7 +714,7 @@ int main(int argc, char **argv) {
 
 /* TEAPOT MODEL DATA -------------------------------------------------------- */
 // Original model data from https://graphics.cs.utah.edu/teapot/
-const char *TEAPOT_OBJ =
+static const char *TEAPOT_OBJ =
   "v 2.6 2 0\nv 2.5 1.9 0.23\nv 2.4 1.8 0\nv 3 1.6 0\nv 2.9 1.6 0.23\nv 2.7 "
   "1.6 0\nv 1.6 2.1 0\nv 1.5 2 0.23\nv 1.7 1.9 0\nv 2.7 1 0\nv 2.6 1.1 0.23\nv "
   "2.5 1.2 0\nv 2 0.75 0\nv 1.8 0.47 0.23\nv 1.8 0.32 0\nv -2.8 2.2 0\nv -3 "

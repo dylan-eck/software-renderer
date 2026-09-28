@@ -10,6 +10,16 @@ Icon[]
 *.out
 *.bmp
 *.obj
+!assets/teapot_min.obj
+
+# build output
+bin/
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
 
 # testing
 *.dSYM

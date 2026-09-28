@@ -718,6 +718,8 @@ int main(int argc, char **argv) {
 
 /* TEAPOT MODEL DATA -------------------------------------------------------- */
 // Original model data from https://graphics.cs.utah.edu/teapot/
+// Embedded string generated from assets/teapot_min.obj by
+// scripts/gen_teapot_str.py
 static const char *TEAPOT_OBJ =
   "v 2.6 2 0\nv 2.5 1.9 0.23\nv 2.4 1.8 0\nv 3 1.6 0\nv 2.9 1.6 0.23\nv 2.7 "
   "1.6 0\nv 1.6 2.1 0\nv 1.5 2 0.23\nv 1.7 1.9 0\nv 2.7 1 0\nv 2.6 1.1 0.23\nv "

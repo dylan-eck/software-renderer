@@ -17,15 +17,19 @@
  * BUILDING:
  * -----------------------------------------------------------------------------
  *
- *   Any C compiler with C99 support should work.
+ *   Any C compiler with C99 support should work. Optimizations are optional
+ *   but make rendering significantly faster, especially at high resolutions.
  *
  *   Linux / macOS:
- *     clang -std=c99 -lm renderer.c
- *     gcc -std=c99 -lm renderer.c
+ *     clang -std=c99 -O2 renderer.c -lm
+ *     gcc -std=c99 -O2 renderer.c -lm
  *
  *   Windows:
- *     cl renderer.c
- *     clang -std=c99 renderer.c
+ *     cl /O2 renderer.c
+ *     clang -std=c99 -O2 renderer.c
+ *
+ *   On Windows, cl outputs renderer.exe and clang outputs a.exe; substitute
+ *   the appropriate name for ./a.out in the examples below.
  *
  *
  * USAGE:

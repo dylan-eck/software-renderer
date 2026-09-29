@@ -47,12 +47,12 @@
  *     ./a.out 2048
  *     ./a.out 1920 1080
  *
- * NOTE ON DESIGN TRADEOFFS
+ * NOTE ON DESIGN TRADEOFFS:
  * -----------------------------------------------------------------------------
  *
  *   This project was intentionally constrained to a single source file with
- *   no dependencies other the the C standard library. Due to these
- *   restrictions, certain design decision prioritize minimalism over
+ *   no dependencies other than the C standard library. Due to these
+ *   restrictions, certain design decisions prioritize minimalism over
  *   robustness and extensibility.
  *
  *   For example:
@@ -64,7 +64,6 @@
  *   multiple translation units with stronger validation, clearer module
  *   boundaries, and more complete math utilities.
  *
- *   These trade-offs are deliberate and aligned with the project's goals.
  * -----------------------------------------------------------------------------
  */
 
@@ -116,7 +115,7 @@
 
 /* CONSTANTS ---------------------------------------------------------------- */
 static const char *TEAPOT_OBJ; // See the end of this file for teapot model data
-static const char *OUPUT_FILE_NAME = "out.bmp";
+static const char *OUTPUT_FILE_NAME = "out.bmp";
 
 /* TYPEDEFS ----------------------------------------------------------------- */
 typedef int32_t fix32_t;
@@ -143,9 +142,9 @@ typedef struct {
   vec3 sun_dir;
 } RenderParams;
 
-DARRAY_DEFINE(vec2, vec2_da);
-DARRAY_DEFINE(vec3, vec3_da);
-DARRAY_DEFINE(Vertex, Vertex_da);
+DARRAY_DEFINE(vec2, vec2_da)
+DARRAY_DEFINE(vec3, vec3_da)
+DARRAY_DEFINE(Vertex, Vertex_da)
 
 /* UTILITY FUNCTIONS -------------------------------------------------------- */
 void error_and_exit(const char *message) {
@@ -458,7 +457,7 @@ int render(const uint32_t vertex_count, const Vertex *vertices,
 
       vec3 n = vertices[i + j].normal;
       // note that this normal transformation is only correct under uniform
-      // scalling
+      // scaling
       vec4 wn = mat4_vec4_mult(params.model_mat, (vec4){n.x, n.y, n.z, 0});
       normals[j] = vec3_norm((vec3){wn.x, wn.y, wn.z});
 
@@ -705,9 +704,9 @@ int main(int argc, char **argv) {
                height, params);
   if (res != 0) error_and_exit("Rendering failed");
 
-  res = write_bmp_image(OUPUT_FILE_NAME, width, height, color_buffer);
+  res = write_bmp_image(OUTPUT_FILE_NAME, width, height, color_buffer);
   if (res != 0) error_and_exit("Failed to write output image");
-  printf("wrote output image %s\n", OUPUT_FILE_NAME);
+  printf("wrote output image %s\n", OUTPUT_FILE_NAME);
 
   free(vertices);
   free(color_buffer);

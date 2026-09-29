@@ -26,11 +26,12 @@ def render_test_models(width, height):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("width", nargs="?", type=int, default=1920)
-    parser.add_argument("height", nargs="?", type=int, default=1080)
+    # same defaults as the renderer itself
+    parser.add_argument("width", nargs="?", type=int, default=800)
+    parser.add_argument("height", nargs="?", type=int, help="defaults to width")
     args = parser.parse_args()
 
-    render_test_models(args.width, args.height)
+    render_test_models(args.width, args.height or args.width)
 
 
 if __name__ == "__main__":

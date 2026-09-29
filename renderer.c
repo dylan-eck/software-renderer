@@ -530,7 +530,7 @@ int render(const uint32_t vertex_count, const Vertex *vertices,
         uint8_t g = (uint8_t)(fminf(fmaxf(light, 0.0f), 1.0f) * 255);
         uint8_t b = (uint8_t)(fminf(fmaxf(light, 0.0f), 1.0f) * 255);
 
-        color_buffer[idx] = (0xFF << 24) | (r << 16) | (g << 8) | b;
+        color_buffer[idx] = ((uint32_t)0xFFu << 24) | (r << 16) | (g << 8) | b;
       }
     }
   }
